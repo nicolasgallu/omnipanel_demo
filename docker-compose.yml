@@ -1,0 +1,58 @@
+services:
+  # MySQL local de desarrollo: misma versión/engine que Cloud SQL, con el
+  # dump real (schemas + datos) cargado en el primer arranque del volumen.
+  # Los datos persisten en el volumen `mysql_data`; para re-seedear desde cero:
+  #   docker compose down -v && ./run.sh
+  mysql:
+    image: mysql:8.4
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${PASSWORD_DB}
+      MYSQL_DATABASE: ${NAME_DB}
+      MYSQL_USER: ${USER_DB}
+      MYSQL_PASSWORD: ${PASSWORD_DB}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/seed_data.sql:/docker-entrypoint-initdb.d/01_seed.sql:ro
+      - ./docker/mysql/02_grants.sql:/docker-entrypoint-initdb.d/02_grants.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8080"
+      # La DB local del stack (override de DB_HOST=127.0.0.1 del .env)
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      GOOGLE_APPLICATION_CREDENTIALS: /app/service_account.json
+    volumes:
+      # Para GCS (subida de imágenes/logo); la DB ya no lo necesita.
+      - ./backend/service_account.json:/app/service_account.json:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    # Mismo puerto que el dev clásico: http://localhost:5173
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:

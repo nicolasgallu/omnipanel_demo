@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Omnipanel — build + deploy a Cloud Run en un solo push.
+#
+# El trigger de Cloud Build apunta a ESTE archivo (/cloudbuild.yaml) y al branch
+# master. Las variables de entorno NO se setean acá: van directo en el servicio
+# de Cloud Run (consola o `gcloud run services update`). Ver DEPLOY.md y
+# backend/.env.production (gitignored) para los valores.
+# ─────────────────────────────────────────────────────────────────────────────
+steps:
+  # 1) Build de la imagen mergeada (frontend + backend).
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '${_ARTIFACT_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/${_SERVICE}:$COMMIT_SHA'
+      - '-t'
+      - '${_ARTIFACT_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/${_SERVICE}:latest'
+      - '.'
+
+  # 2) Push al Artifact Registry.
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_ARTIFACT_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/${_SERVICE}:$COMMIT_SHA'
+
+  # 3) Deploy a Cloud Run (misma región que Cloud SQL: us-south1).
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE}'
+      - '--image=${_ARTIFACT_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/${_SERVICE}:$COMMIT_SHA'
+      - '--region=${_RUN_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--cpu=1'
+      - '--memory=1Gi'
+      - '--concurrency=${_CONCURRENCY}'
+      - '--min-instances=${_MIN_INSTANCES}'
+      - '--max-instances=${_MAX_INSTANCES}'
+      - '--timeout=300s'
+      - '--cpu-boost'
+      - '--service-account=${_RUN_SA}'
+
+substitutions:
+  _SERVICE: 'omnipanel'
+  _RUN_REGION: 'us-south1'
+  _ARTIFACT_REGION: 'northamerica-northeast1'
+  _ARTIFACT_REPO: 'omnipanel-demo-registry'
+  _RUN_SA: 'omnipanel-cloudrun@nicoservertest.iam.gserviceaccount.com'
+  _CONCURRENCY: '8'
+  _MIN_INSTANCES: '1'
+  _MAX_INSTANCES: '5'
+
+images:
+  - '${_ARTIFACT_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REPO}/${_SERVICE}:$COMMIT_SHA'
+
+options:
+  logging: 'CLOUD_LOGGING_ONLY'
