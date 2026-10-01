@@ -35,3 +35,6 @@ SECRET_KEY = os.getenv("SECRET_KEY", "omnipanel-dev-secret-change-me")
 
 # CORS for the frontend dev server
 CORS_ORIGIN = os.getenv("CORS_ORIGIN", "*")
+
+# Base pública del dashboard (deep links de notificaciones).
+APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:5173")

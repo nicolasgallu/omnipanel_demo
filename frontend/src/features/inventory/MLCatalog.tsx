@@ -272,6 +272,8 @@ export function MLPubTypeStep({
   setMode,
   match,
   setMatch,
+  mandatory,
+  setMandatory,
   accountId,
   initialQuery,
 }: {
@@ -279,13 +281,14 @@ export function MLPubTypeStep({
   setMode: (m: 'traditional' | 'catalog') => void
   match: CatalogProduct | null
   setMatch: (c: CatalogProduct | null) => void
+  mandatory: boolean
+  setMandatory: (v: boolean) => void
   accountId: number
   initialQuery?: string
 }) {
-  // Catálogo obligatorio: cuando la búsqueda del producto devuelve SOLO
-  // fichas catalog_required, la categoría exige catálogo y la opción
-  // tradicional queda deshabilitada.
-  const [mandatory, setMandatory] = useState(false)
+  // `mandatory` vive en el panel (MLChannelPanel): se setea en el pre-flight
+  // de confirmCategory (búsqueda exacta por GTIN) y acá, reactivamente,
+  // cuando el matcher devuelve solo fichas catalog_required.
   const options: { id: 'traditional' | 'catalog'; title: string; desc: string }[] = [
     { id: 'traditional', title: 'Publicación tradicional', desc: 'Vos controlás título, fotos y atributos, como hasta ahora.' },
     { id: 'catalog', title: 'Catálogo', desc: 'La ficha la pone MercadoLibre. Vos solo definís precio, stock y condiciones.' },

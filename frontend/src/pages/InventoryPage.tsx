@@ -25,7 +25,7 @@ const CSV_COLUMNS = [
 ]
 
 export function InventoryPage() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const channel = (searchParams.get('channel') as 'ml' | 'tn' | null) || ''
 
   const [q, setQ] = useState('')
@@ -41,6 +41,27 @@ export function InventoryPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [drawerProduct, setDrawerProduct] = useState<Product | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+
+  // Deep link desde Preguntas: /inventory?product={id} abre el drawer de ese producto.
+  useEffect(() => {
+    const raw = searchParams.get('product')
+    if (!raw) return
+    const productId = Number(raw)
+    if (!Number.isFinite(productId)) return
+    let alive = true
+    inventoryApi
+      .get(productId)
+      .then((res) => {
+        if (alive) setDrawerProduct(res.product)
+      })
+      .catch(() => {
+        /* producto inexistente: no se abre nada */
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const setCols = useCallback((c: ColKey[]) => {
     setColsState(c)
@@ -394,7 +415,18 @@ export function InventoryPage() {
       </div>
 
       {drawerProduct && (
-        <ProductDrawer product={drawerProduct} onClose={() => setDrawerProduct(null)} onChanged={onDrawerChanged} />
+        <ProductDrawer
+          product={drawerProduct}
+          onClose={() => {
+            setDrawerProduct(null)
+            if (searchParams.has('product')) {
+              const next = new URLSearchParams(searchParams)
+              next.delete('product')
+              setSearchParams(next, { replace: true })
+            }
+          }}
+          onChanged={onDrawerChanged}
+        />
       )}
     </div>
   )

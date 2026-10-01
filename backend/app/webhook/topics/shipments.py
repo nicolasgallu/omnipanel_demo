@@ -87,7 +87,7 @@ def handle(account, data):
             logger.warning("Label not resolved for shipment %s (text fallback): %s",
                            external_id, exc)
         notify_business(
-            account["business_id"], "shipment_ready",
+            account["business_id"], "label_ready",
             {"platform": "MercadoLibre",
              "shipment_id": str(external_id),
              "order_id": order_id,

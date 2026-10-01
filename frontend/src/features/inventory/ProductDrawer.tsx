@@ -324,22 +324,29 @@ export function ProductDrawer({
                       }}
                     />
                   )}
-                  {tab === 'ml' && (
+                  {/* Paneles de canal SIEMPRE montados (ocultos con CSS): el
+                      estado del wizard (modo catálogo, ficha elegida, paso)
+                      sobrevive al cambio de pestaña. Antes, cambiar de pestaña
+                      desmontaba el panel y un "Publicar" podía salir como
+                      tradicional con el estado reseteado en silencio. */}
+                  <div style={{ display: tab === 'ml' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
                     <MLChannelPanel
+                      key={p.id}
                       product={p}
                       listing={mlListing}
                       onReload={reload}
                       onChanged={onChanged}
                     />
-                  )}
-                  {tab === 'tn' && (
+                  </div>
+                  <div style={{ display: tab === 'tn' ? 'flex' : 'none', flex: 1, flexDirection: 'column', minHeight: 0 }}>
                     <TNChannelPanel
+                      key={p.id}
                       product={p}
                       listing={tnListing}
                       onReload={reload}
                       onChanged={onChanged}
                     />
-                  )}
+                  </div>
                 </ErrorBoundary>
               )}
             </div>

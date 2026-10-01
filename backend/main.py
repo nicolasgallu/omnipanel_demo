@@ -12,6 +12,7 @@ from app.api.channels import channels_bp
 from app.api.credentials import credentials_bp
 from app.api.images_event import images
 from app.api.inventory import inventory_bp
+from app.api.messages_api import messages_api_bp
 from app.api.notifications_api import notifications_bp
 from app.api.oauth import oauth_bp
 from app.api.platform_admin import platform_bp
@@ -45,6 +46,7 @@ def create_app():
     app.register_blueprint(oauth_bp)
     app.register_blueprint(support_bp)
     app.register_blueprint(notifications_bp)
+    app.register_blueprint(messages_api_bp)
     # Panel de plataforma: admins gestionan businesses y cuentas.
     app.register_blueprint(platform_bp)
 

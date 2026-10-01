@@ -28,10 +28,16 @@ const NOTIF_EVENTS: { key: NotificationEventKey; label: string; desc: string; hi
   { key: 'order_delivered', label: 'Orden entregada', desc: 'Cuando el envío llega al comprador.' },
   { key: 'scraping_finished', label: 'Scraping finalizado', desc: 'Cuando termina una corrida de búsqueda de competencia.' },
   {
-    key: 'shipment_ready',
+    key: 'label_ready',
     label: 'Etiqueta lista para despachar',
     desc: "Cuando un envío de MercadoLibre pasa a 'Listo para enviar': mandamos la etiqueta en PDF. Si MercadoLibre todavía no la generó, avisamos por texto con el número de orden para descargarla desde la app.",
     hint: 'El PDF viaja como documento adjunto en WhatsApp y Telegram.',
+  },
+  {
+    key: 'message_needs_review',
+    label: 'Pregunta sin responder por la IA',
+    desc: 'Cuando una pregunta o mensaje de MercadoLibre queda Para revisar (reclamo, devolución, baja confianza, fallo de envío) o la IA está en Off. Un solo aviso por conversación hasta que el comprador vuelva a escribir.',
+    hint: 'Incluye un link directo que abre la conversación en Preguntas.',
   },
 ]
 

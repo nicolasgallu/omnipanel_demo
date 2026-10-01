@@ -189,8 +189,9 @@ let mockNotifSettings = {
     order_confirmed: { whatsapp: true, telegram: true },
     order_cancelled: { whatsapp: true, telegram: true },
     order_delivered: { whatsapp: false, telegram: false },
-    shipment_ready: { whatsapp: true, telegram: true },
+    label_ready: { whatsapp: true, telegram: true },
     scraping_finished: { whatsapp: false, telegram: true },
+    message_needs_review: { whatsapp: true, telegram: true },
   },
 }
 let mockScrapflyKey: string | null = null
@@ -628,22 +629,135 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     ai_generate_description: 'Redactá una descripción de producto persuasiva y estructurada en párrafos cortos. Tono profesional y cercano, en español rioplatense.',
     ai_generate_brand: 'Indicá únicamente la marca del producto. Si no podés determinarla, respondé "Genérico".',
     ai_generate_model: 'Indicá únicamente el modelo o versión. Si no existe, generá un código corto basado en el nombre.',
-    ai_category: 'Seleccioná la categoría de MercadoLibre más específica y correcta. Devolvé el id y su ruta.',
-    ai_auditor: 'Actuá como auditor de calidad. Revisá título, descripción, fotos y atributos, y devolvé mejoras priorizadas.',
+    cs_tone: 'Respondé con tono cercano y profesional, en español rioplatense (voseo). Saludá por el nombre del comprador, andá al punto y cerrá con un saludo breve.',
+    cs_rules: 'No compartas datos de contacto ni pidas datos personales fuera de la mensajería. No prometas plazos ni envíos gratis que no estén configurados. No respondas reclamos, devoluciones ni temas legales: derivalos a una persona.',
+    cs_classifier: 'Clasificá el mensaje en: consulta_producto, envio, facturacion, post_venta, reclamo, devolucion, datos_personales u otro. Devolvé la categoría y si requiere humano (true/false) con un motivo corto.',
+    cs_writer: 'Redactá una respuesta de máximo 350 caracteres usando solo datos del producto (precio, stock, atributos) y del catálogo del vendedor. Si citás otro producto, incluí nombre, precio y stock. Si te falta un dato, decí que lo consultás.',
+    cs_auditor: 'Revisá el borrador contra las reglas y los datos del producto. Devolvé verdict (approved | corrected), score de 0 a 1 y la lista de objeciones. Si corregís, devolvé el texto corregido.',
     ai_improving_human_reply: 'Mejorá la redacción de la respuesta del vendedor manteniendo el sentido original.',
-    ai_inventory_search: 'Convertí la consulta del usuario en filtros de inventario. Devolvé un JSON con los filtros detectados.',
-    ai_general: 'Sos el asistente de Omnipanel para un vendedor de e-commerce en Argentina.',
-    rules: 'Nunca prometas envíos gratis salvo que esté configurado. Ante datos faltantes, pedí aclaración.',
+  }
+  let mockCsSettings: { mode: string; min_confidence: number; audit: boolean } = {
+    mode: 'suggest',
+    min_confidence: 75,
+    audit: true,
   }
   if (method === 'GET' && path === '/api/ai/prompts') {
     await sleep(200)
-    return send(200, { prompts: mockPrompts, supported: Object.keys(mockPrompts) })
+    return send(200, { prompts: mockPrompts, supported: Object.keys(mockPrompts), settings: mockCsSettings })
   }
   if (method === 'PUT' && path === '/api/ai/prompts') {
     await sleep(400)
     const incoming = (body.prompts as Record<string, string>) || {}
     mockPrompts = { ...mockPrompts, ...incoming }
-    return send(200, { prompts: mockPrompts, supported: Object.keys(mockPrompts) })
+    if (body.settings && typeof body.settings === 'object') {
+      mockCsSettings = { ...mockCsSettings, ...(body.settings as typeof mockCsSettings) }
+    }
+    return send(200, { prompts: mockPrompts, supported: Object.keys(mockPrompts), settings: mockCsSettings })
+  }
+
+  // ── Mensajes de MercadoLibre (Preguntas · Atención al cliente) ──
+  if (path.startsWith('/api/mercadolibre/messages')) {
+    const msgKind = (k: string) => (k === 'post_sale' ? 'post_sale' : 'question')
+    type MockMsg = {
+      id: string; kind: 'question' | 'post_sale'; buyer_name: string; product_title: string
+      last_text: string; reply_status: string; assigned_to: string | null; ai_confidence: number | null
+      created_at: string; last_activity: string; listing_id: string; last_reply_mode: 'ai' | 'human' | null
+      ml_url: string; product_id: number | null; review_reason?: string | null
+    }
+    let mockMsgs: MockMsg[] = [
+      { id: 'M-1', kind: 'question', buyer_name: 'Martina R.', product_title: 'Set Tabla Gourmet', last_text: '¿La tabla viene con los chocolates incluidos?', reply_status: 'ai_suggested', assigned_to: null, ai_confidence: 0.91, created_at: new Date(Date.now() - 6e5).toISOString(), last_activity: new Date(Date.now() - 6e5).toISOString(), listing_id: 'MLA1000000822', last_reply_mode: null, ml_url: 'https://www.mercadolibre.com.ar/preguntas/vendedor?item=MLA1000000822&question=M-1', product_id: 1 },
+      { id: 'M-2', kind: 'post_sale', buyer_name: 'Julián P.', product_title: 'Paño Decoración Estampado', last_text: 'Me llegó con una mancha, quiero hacer la devolución.', reply_status: 'needs_review', assigned_to: null, ai_confidence: null, created_at: new Date(Date.now() - 38e5).toISOString(), last_activity: new Date(Date.now() - 14e5).toISOString(), listing_id: 'MLA1000000274', last_reply_mode: 'human', ml_url: 'https://www.mercadolibre.com.ar/mensajes/M-2', product_id: 2, review_reason: 'Devolución: la IA no responde reclamos ni devoluciones.' },
+      { id: 'M-3', kind: 'question', buyer_name: 'Diego S.', product_title: 'Quesera Plástico', last_text: '¿Es apta lavavajillas? ¿Tienen en otro color?', reply_status: 'new', assigned_to: null, ai_confidence: null, created_at: new Date(Date.now() - 2e5).toISOString(), last_activity: new Date(Date.now() - 2e5).toISOString(), listing_id: 'MLA1000000137', last_reply_mode: null, ml_url: 'https://www.mercadolibre.com.ar/preguntas/vendedor?item=MLA1000000137&question=M-3', product_id: 3 },
+      { id: 'M-4', kind: 'question', buyer_name: 'Sofía M.', product_title: 'Set Vaso + Perfume', last_text: '¿Viene en caja de regalo?', reply_status: 'answered', assigned_to: null, ai_confidence: 0.95, created_at: new Date(Date.now() - 108e5).toISOString(), last_activity: new Date(Date.now() - 103e5).toISOString(), listing_id: 'MLA1000000411', last_reply_mode: 'ai', ml_url: 'https://www.mercadolibre.com.ar/preguntas/vendedor?item=MLA1000000411&question=M-4', product_id: 4 },
+      { id: 'M-5', kind: 'question', buyer_name: 'Usuario eliminado', product_title: 'Promo Taza + Perfume', last_text: '¿Tienen stock?', reply_status: 'closed', assigned_to: null, ai_confidence: null, created_at: new Date(Date.now() - 1740e5).toISOString(), last_activity: new Date(Date.now() - 1728e5).toISOString(), listing_id: 'MLA1000000685', last_reply_mode: null, ml_url: 'https://www.mercadolibre.com.ar/preguntas/vendedor?item=MLA1000000685&question=M-5', product_id: 5 },
+    ]
+    const counts = (k: 'question' | 'post_sale') => {
+      const base: Record<string, number> = { total: 0, new: 0, ai_suggested: 0, needs_review: 0, answered: 0, closed: 0 }
+      for (const m of mockMsgs) {
+        if (m.kind !== k) continue
+        base.total += 1
+        if (base[m.reply_status] !== undefined) base[m.reply_status] += 1
+      }
+      return base
+    }
+
+    const listMatch = path === '/api/mercadolibre/messages' && method === 'GET'
+    if (listMatch) {
+      await sleep(450)
+      const kind = msgKind(url.searchParams.get('kind') || 'question')
+      const statuses = (url.searchParams.get('reply_status') || '').split(',').filter(Boolean)
+      const q = (url.searchParams.get('q') || '').toLowerCase()
+      const page = Math.max(1, Number(url.searchParams.get('page') || 1))
+      const pageSize = Math.min(200, Number(url.searchParams.get('page_size') || 50))
+      const items = mockMsgs
+        .filter((m) => m.kind === kind && (statuses.length === 0 || statuses.includes(m.reply_status)))
+        .filter((m) => !q || m.buyer_name.toLowerCase().includes(q) || m.product_title.toLowerCase().includes(q))
+        .sort((a, b) => b.last_activity.localeCompare(a.last_activity))
+      return send(200, {
+        items: items.slice((page - 1) * pageSize, page * pageSize),
+        page, page_size: pageSize, total: items.length,
+        counts: { question: counts('question'), post_sale: counts('post_sale') },
+      })
+    }
+
+    const detailMatch = path.match(/^\/api\/mercadolibre\/messages\/([^/]+)$/)
+    if (detailMatch && method === 'GET') {
+      await sleep(400)
+      const m = mockMsgs.find((x) => x.id === detailMatch[1])
+      if (!m) return send(404, { error: 'not_found', message: 'No encontramos esta conversación.' })
+      const draft = m.reply_status === 'ai_suggested'
+        ? { author: 'seller', mode: 'ai', text: `¡Hola ${m.buyer_name.split(' ')[0]}! Gracias por tu consulta. ¡Saludos!`, status: 'draft', audit_verdict: 'approved', audit_score: 0.91, audit_issues: [], created_at: new Date().toISOString(), cited_products: [{ title: m.product_title, price: 31000, stock: 1 }] }
+        : null
+      return send(200, {
+        message: { ...m, answered_externally: false, closed_reason: m.reply_status === 'closed' ? 'MercadoLibre eliminó esta pregunta.' : null, review_reason: m.review_reason ?? null, ai_error: m.review_reason ?? null },
+        replies: [
+          { author: 'buyer', mode: null, text: m.last_text, status: 'received', audit_verdict: null, audit_score: null, audit_issues: [], created_at: m.created_at },
+          ...(m.reply_status === 'answered' ? [{ author: 'seller', mode: m.last_reply_mode ?? 'human', text: '¡Gracias por tu consulta!', status: 'sent', audit_verdict: null, audit_score: null, audit_issues: [], created_at: m.last_activity }] : []),
+          ...(draft ? [draft] : []),
+        ],
+        product: { title: m.product_title, price: 31000, stock: m.reply_status === 'closed' ? 0 : 1, listing_status: 'published' },
+      })
+    }
+
+    const actionMatch = path.match(/^\/api\/mercadolibre\/messages\/([^/]+)\/(ai-suggest|improve|reply|discard-suggestion|assign)$/)
+    if (actionMatch && method === 'POST') {
+      await sleep(700)
+      const m = mockMsgs.find((x) => x.id === actionMatch[1])
+      if (!m) return send(404, { error: 'not_found', message: 'No encontramos esta conversación.' })
+      if (m.reply_status === 'closed') return send(409, { error: 'closed', message: 'La conversación está cerrada en MercadoLibre.' })
+      const action = actionMatch[2]
+      if (action === 'ai-suggest') {
+        if (/devoluci|reclamo|mancha|roto/i.test(m.last_text)) {
+          m.reply_status = 'needs_review'
+          return send(400, { error: 'needs_human', message: 'La IA no pudo responder: el mensaje es un reclamo o una devolución y requiere una persona.' })
+        }
+        m.reply_status = 'ai_suggested'; m.ai_confidence = 0.86
+        return send(200, {
+          reply: { author: 'seller', mode: 'ai', text: `¡Hola ${m.buyer_name.split(' ')[0]}! Gracias por tu consulta. ¡Saludos!`, status: 'draft', audit_verdict: 'approved', audit_score: 0.86, audit_issues: [], created_at: new Date().toISOString(), cited_products: [{ title: m.product_title, price: 31000, stock: 1 }] },
+          audit: { verdict: 'approved', score: 0.86, issues: [] },
+        })
+      }
+      if (action === 'improve') {
+        const text = String(body.text || '')
+        if (!text.trim()) return send(400, { error: 'empty', message: 'Escribí algo para que la IA lo pueda mejorar.' })
+        return send(200, { text: `¡Hola ${m.buyer_name.split(' ')[0]}! ${text.trim()} ¡Saludos!` })
+      }
+      if (action === 'reply') {
+        const text = String(body.text || '')
+        if (!text.trim()) return send(400, { error: 'empty', message: 'La respuesta está vacía.' })
+        if (text.length > 2000) return send(400, { error: 'too_long', message: 'MercadoLibre acepta hasta 2000 caracteres por respuesta.' })
+        m.reply_status = 'answered'; m.last_reply_mode = 'human'; m.last_activity = new Date().toISOString()
+        return send(200, { reply: { author: 'seller', mode: 'human', text, status: 'sent', audit_verdict: null, audit_score: null, audit_issues: [], created_at: new Date().toISOString() } })
+      }
+      if (action === 'discard-suggestion') {
+        if (m.reply_status === 'ai_suggested') m.reply_status = 'new'
+        return send(200, { ok: true })
+      }
+      if (action === 'assign') {
+        m.assigned_to = m.assigned_to === 'me' ? null : 'me'
+        return send(200, { assigned_to: m.assigned_to })
+      }
+    }
   }
 
   // ── Settings / password / logo (business-only) ──

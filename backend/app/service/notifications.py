@@ -22,7 +22,7 @@ import requests
 from requests.exceptions import RequestException
 
 from app.db.helpers import execute, get_one
-from app.settings.config import TELEGRAM_BOT_TOKEN, TOKEN_WHAPI
+from app.settings.config import APP_BASE_URL, TELEGRAM_BOT_TOKEN, TOKEN_WHAPI
 from app.utils.logger import logger
 
 BUSINESSES_TABLE = "platform_accounts.businesses"
@@ -99,20 +99,28 @@ def enviar_mensaje_telegram(token, chat_id, mensaje):
 # ─── Catálogo de eventos y defaults ───────────────────────────────────────────
 
 NOTIFICATION_EVENTS = (
-    "order_confirmed",     # primera venta pagada (None -> paid)
-    "order_cancelled",     # paid -> cancelled (stock revertido)
-    "order_delivered",     # envío llega a 'delivered' (Meli)
-    "shipment_ready",      # envío pasa a 'ready_to_ship' (etiqueta lista)
-    "scraping_finished",   # fin de una corrida del scraper (Scrapfly)
+    "order_confirmed",         # primera venta pagada (None -> paid)
+    "order_cancelled",         # paid -> cancelled (stock revertido)
+    "order_delivered",         # envío llega a 'delivered' (Meli)
+    "label_ready",             # envío pasa a 'ready_to_ship' (etiqueta lista)
+    "scraping_finished",       # fin de una corrida del scraper (Scrapfly)
+    "message_needs_review",    # pregunta/mensaje de Meli sin responder por IA
 )
+
+# Claves viejas de eventos (configs guardados antes del rename).
+LEGACY_EVENT_KEYS = {
+    "shipment_ready": "label_ready",
+    "pending_question": "message_needs_review",
+}
 
 # Canales por defecto (el negocio puede cambiarlos desde Configuración).
 DEFAULT_CHANNELS = {
     "order_confirmed": {"whatsapp": True, "telegram": True},
     "order_cancelled": {"whatsapp": True, "telegram": True},
     "order_delivered": {"whatsapp": False, "telegram": False},
-    "shipment_ready": {"whatsapp": True, "telegram": True},
+    "label_ready": {"whatsapp": True, "telegram": True},
     "scraping_finished": {"whatsapp": False, "telegram": True},
+    "message_needs_review": {"whatsapp": True, "telegram": True},
 }
 
 
@@ -330,6 +338,10 @@ def load_notification_settings(business_id):
 
     events = stored.get("events")
     if isinstance(events, dict):
+        # Compat retroactiva: configs guardados con las claves viejas de eventos.
+        for legacy, current in LEGACY_EVENT_KEYS.items():
+            if legacy in events and current not in events:
+                events[current] = events[legacy]
         for key in NOTIFICATION_EVENTS:
             entry = events.get(key)
             if not isinstance(entry, dict):
@@ -434,7 +446,7 @@ def render_message(event_key, context):
             platform, order_id)
     if event_key == "order_delivered":
         return "📦 Orden entregada · {} · Orden {}".format(platform, order_id)
-    if event_key == "shipment_ready":
+    if event_key == "label_ready":
         shipment_id = str(context.get("shipment_id") or "—")
         return ("🏷️ Envío listo para despachar · Envío {} · Orden {}. "
                 "MercadoLibre todavía no terminó de generar la etiqueta — "
@@ -448,6 +460,15 @@ def render_message(event_key, context):
         if errors:
             msg += " · {} error{}".format(errors, "es" if errors != 1 else "")
         return msg
+    if event_key == "message_needs_review":
+        buyer = str(context.get("buyer_name") or "Comprador")
+        product = str(context.get("product_title") or "producto")
+        snippet = (str(context.get("snippet") or "")[:80])
+        reason = str(context.get("reason") or "")
+        mid = context.get("message_id")
+        link = "{}/preguntas?open={}".format(APP_BASE_URL, mid)
+        return ("🔔 Nueva consulta sin responder · {}\n{}: “{}”\nMotivo: {}\n"
+                "Respondé desde acá: {}").format(product, buyer, snippet, reason, link)
     return "🔔 {}".format(context.get("message") or event_key)
 
 
@@ -509,7 +530,7 @@ def notify_business(business_id, event_key, context):
     """Envía el evento al negocio por los canales habilitados. Nunca levanta.
 
     Soporta documentos: si context trae `document_url` (p. ej. la etiqueta en
-    PDF de `shipment_ready`), se manda como documento con caption; si no, el
+    PDF de `label_ready`), se manda como documento con caption; si no, el
     mensaje de texto renderizado (fallback). El documento es una URL pública
     que se reutiliza para todos los contactos (no se regenera por destino).
     """

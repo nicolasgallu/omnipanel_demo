@@ -10,6 +10,7 @@ import { ShipmentsPage } from './pages/ShipmentsPage'
 import { ComingSoonPage } from './pages/ComingSoonPage'
 import { UsuariosPage } from './pages/UsuariosPage'
 import { PromptsAIPage } from './pages/PromptsAIPage'
+import PreguntasPage from './pages/PreguntasPage'
 import { ConfiguracionPage } from './pages/ConfiguracionPage'
 import { AdminAuthProvider } from './lib/adminAuth'
 import AdminPage from './pages/AdminPage'
@@ -70,7 +71,7 @@ export default function App() {
         <Route path="/envios/tiendanube" element={<ComingSoonPage title="Envios · Tienda Nube" icon="tn" />} />
         <Route path="/competencia" element={<ComingSoonPage title="Competencia" icon="competencia" />} />
         <Route path="/prompts-ai" element={<PromptsAIPage />} />
-        <Route path="/preguntas" element={<ComingSoonPage title="Preguntas" icon="preguntas" />} />
+        <Route path="/preguntas" element={<PreguntasPage />} />
         <Route path="/usuarios" element={<RequireBusiness><UsuariosPage /></RequireBusiness>} />
         <Route path="/configuracion" element={<RequireBusiness><ConfiguracionPage /></RequireBusiness>} />
       </Route>

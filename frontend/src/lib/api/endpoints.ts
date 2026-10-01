@@ -21,6 +21,9 @@ import type {
   MLPerformance,
   MLSellingCosts,
   MLSettings,
+  MsgDetail,
+  MsgListResponse,
+  MsgReply,
   NotifChannel,
   NotificationContact,
   NotificationSettings,
@@ -38,6 +41,9 @@ import type {
   TNListingRow,
   TNSettings,
   User,
+  CsSettings,
+  MsgKind,
+  ReplyStatus,
 } from './types'
 
 export const authApi = {
@@ -104,8 +110,14 @@ export const aiApi = {
       body: { kind, prompt, current },
     }),
   getPrompts: () => api<PromptsResponse>('/api/ai/prompts'),
-  savePrompts: (prompts: Record<string, string>) =>
-    api<PromptsResponse>('/api/ai/prompts', { method: 'PUT', body: { prompts } }),
+  savePrompts: (prompts?: Record<string, string>, settings?: CsSettings) =>
+    api<PromptsResponse>('/api/ai/prompts', {
+      method: 'PUT',
+      body: {
+        ...(prompts !== undefined ? { prompts } : {}),
+        ...(settings !== undefined ? { settings } : {}),
+      },
+    }),
 }
 
 export const adminApi = {
@@ -161,6 +173,53 @@ export const notificationsApi = {
     api<{ status: string }>('/api/notifications/test', {
       method: 'POST',
       body: { channel, contact },
+    }),
+}
+
+// ─── Mensajes de MercadoLibre (Preguntas · Atención al cliente) ──────────────
+
+export const messagesApi = {
+  list: (params: {
+    kind: MsgKind
+    reply_status: ReplyStatus[]
+    q: string
+    page: number
+    page_size: number
+  }) =>
+    api<MsgListResponse>(
+      `/api/mercadolibre/messages${queryString({
+        kind: params.kind,
+        reply_status: params.reply_status.length
+          ? params.reply_status.join(',')
+          : undefined,
+        q: params.q,
+        page: params.page,
+        page_size: params.page_size,
+      })}`,
+    ),
+  get: (id: string) => api<MsgDetail>(`/api/mercadolibre/messages/${id}`),
+  aiSuggest: (id: string) =>
+    api<{ reply: MsgReply; audit: { verdict: 'approved' | 'corrected'; score: number; issues: string[] } }>(
+      `/api/mercadolibre/messages/${id}/ai-suggest`,
+      { method: 'POST' },
+    ),
+  improve: (id: string, text: string) =>
+    api<{ text: string }>(`/api/mercadolibre/messages/${id}/improve`, {
+      method: 'POST',
+      body: { text },
+    }),
+  reply: (id: string, text: string) =>
+    api<{ reply: MsgReply }>(`/api/mercadolibre/messages/${id}/reply`, {
+      method: 'POST',
+      body: { text },
+    }),
+  discardSuggestion: (id: string) =>
+    api<{ ok: true }>(`/api/mercadolibre/messages/${id}/discard-suggestion`, {
+      method: 'POST',
+    }),
+  assign: (id: string) =>
+    api<{ assigned_to: string | null }>(`/api/mercadolibre/messages/${id}/assign`, {
+      method: 'POST',
     }),
 }
 

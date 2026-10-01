@@ -299,6 +299,70 @@ export type InventoryQuery = {
   page_size?: number
 }
 
+// ─── Mensajes de MercadoLibre (Preguntas · Atención al cliente) ──────────────
+
+export type MsgKind = 'question' | 'post_sale'
+export type ReplyStatus = 'new' | 'ai_suggested' | 'needs_review' | 'answered' | 'closed'
+export type AiMode = 'off' | 'suggest' | 'autopilot'
+export type MsgListingStatus = 'published' | 'paused' | 'unpublished' | 'failed'
+
+export interface MsgListItem {
+  id: string
+  kind: MsgKind
+  buyer_name: string
+  product_title: string
+  last_text: string
+  reply_status: ReplyStatus
+  assigned_to: string | null
+  ai_confidence: number | null
+  created_at: string
+  last_activity: string
+  listing_id: string
+  last_reply_mode: 'ai' | 'human' | null
+  ml_url: string
+}
+
+export interface MsgReply {
+  author: 'buyer' | 'seller'
+  mode: 'ai' | 'human' | null
+  text: string
+  status: 'received' | 'sent' | 'failed' | 'draft'
+  audit_verdict: 'approved' | 'corrected' | null
+  audit_score: number | null
+  audit_issues: string[]
+  created_at: string
+  cited_products?: { title: string; price: number; stock: number }[]
+}
+
+export interface MsgDetail {
+  message: MsgListItem & {
+    product_id: number | null
+    answered_externally: boolean
+    closed_reason: string | null
+    review_reason: string | null
+    ai_error: string | null
+  }
+  replies: MsgReply[]
+  product: { title: string; price: number; stock: number; listing_status: MsgListingStatus }
+}
+
+export interface MsgListResponse {
+  items: MsgListItem[]
+  page: number
+  page_size: number
+  total: number
+  counts: {
+    question: Record<ReplyStatus, number> & { total: number }
+    post_sale: Record<ReplyStatus, number> & { total: number }
+  }
+}
+
+export interface CsSettings {
+  mode: AiMode
+  min_confidence: number // 0-100
+  audit: boolean
+}
+
 // ─── Administración ──────────────────────────────────────────────────────────
 
 export interface Employee {
@@ -312,6 +376,7 @@ export interface Employee {
 export interface PromptsResponse {
   prompts: Record<string, string>
   supported: string[]
+  settings: CsSettings
   message?: string
 }
 
@@ -327,8 +392,9 @@ export type NotificationEventKey =
   | 'order_confirmed'
   | 'order_cancelled'
   | 'order_delivered'
-  | 'shipment_ready'
+  | 'label_ready'
   | 'scraping_finished'
+  | 'message_needs_review'
 
 export interface NotificationEventSetting {
   whatsapp: boolean

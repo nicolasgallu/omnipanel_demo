@@ -2,7 +2,7 @@
 venta de MercadoLibre (mercadolibre.selling_costs)."""
 import json
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from app.api.auth_utils import current_business_id, current_user, require_auth, require_business
 from app.api.inventory import _owned_product, _serializable
@@ -96,11 +96,74 @@ def patch_employee(employee_id):
 
 # ─── Prompts de IA (ai.prompts) ───────────────────────────────────────────────
 
+# Keys que ve el front (contrato Figma) -> columna real en ai.prompts.
 PROMPT_KEYS = [
     "ai_generate_title", "ai_generate_description", "ai_generate_brand",
-    "ai_generate_model", "ai_category", "ai_auditor",
-    "ai_improving_human_reply", "ai_inventory_search", "ai_general", "rules",
+    "ai_generate_model",
+    "cs_tone", "cs_rules", "cs_classifier", "cs_writer", "cs_auditor",
+    "ai_improving_human_reply",
 ]
+PROMPT_ALIASES = {
+    "cs_tone": "ai_message_general",
+    "cs_rules": "ai_message_rules",
+    "cs_classifier": "ai_message_intent",
+    "cs_writer": "ai_message_reply",
+    "cs_auditor": "ai_message_auditor",
+    "ai_improving_human_reply": "ai_message_improve_human_reply",
+}
+
+# Settings de respuestas de mensajería (columnas de ai.prompts). El front habla
+# en {mode, min_confidence 0-100, audit}; la DB guarda min_confidence 0-1.
+PROMPT_SETTING_KEYS = ("reply_mode", "reply_min_confidence", "reply_audit_enabled")
+DEFAULT_PROMPT_SETTINGS = {
+    "reply_mode": "suggest",
+    "reply_min_confidence": 0.75,
+    "reply_audit_enabled": 1,
+}
+
+
+def _prompt_settings(row):
+    """Settings de respuestas en el vocabulario del front (0-100, bool)."""
+    out = {}
+    for k in PROMPT_SETTING_KEYS:
+        val = row.get(k) if row else None
+        if val is None:
+            val = DEFAULT_PROMPT_SETTINGS[k]
+        out[k] = val
+    return {
+        "mode": out["reply_mode"],
+        "min_confidence": int(round(float(out["reply_min_confidence"]) * 100)),
+        "audit": bool(out["reply_audit_enabled"]),
+    }
+
+
+def _validate_prompt_settings(settings):
+    """Valida body {"settings": {...}} del PUT. Devuelve columnas o ValueError."""
+    if settings is None:
+        return {}
+    if not isinstance(settings, dict):
+        raise ValueError("settings debe ser un objeto")
+    out = {}
+    if "mode" in settings:
+        mode = settings.get("mode")
+        if mode not in ("off", "suggest", "autopilot"):
+            raise ValueError("mode debe ser off, suggest o autopilot")
+        out["reply_mode"] = mode
+    if "min_confidence" in settings:
+        val = settings.get("min_confidence")
+        try:
+            val = int(val)
+        except (TypeError, ValueError):
+            raise ValueError("min_confidence debe ser un número entero")
+        if not 0 <= val <= 100:
+            raise ValueError("min_confidence debe estar entre 0 y 100")
+        out["reply_min_confidence"] = val / 100.0
+    if "audit" in settings:
+        val = settings.get("audit")
+        if not isinstance(val, bool):
+            raise ValueError("audit debe ser true o false")
+        out["reply_audit_enabled"] = 1 if val else 0
+    return out
 
 
 @admin_bp.route("/ai/prompts", methods=["GET"])
@@ -112,10 +175,12 @@ def get_prompts():
                       + " WHERE business_id = :b",
                       {"b": current_business_id()})
     except LookupError:
-        return jsonify({"prompts": {}, "supported": PROMPT_KEYS, "message":
+        return jsonify({"prompts": {}, "settings": _prompt_settings(None),
+                        "supported": PROMPT_KEYS, "message":
                         "Sin prompts guardados para tu negocio"}), 200
-    prompts = {k: row.get(k) for k in PROMPT_KEYS}
-    return jsonify({"prompts": prompts, "supported": PROMPT_KEYS})
+    prompts = {k: row.get(PROMPT_ALIASES.get(k, k)) for k in PROMPT_KEYS}
+    return jsonify({"prompts": prompts, "settings": _prompt_settings(row),
+                    "supported": PROMPT_KEYS})
 
 
 @admin_bp.route("/ai/prompts", methods=["PUT"])
@@ -123,7 +188,23 @@ def get_prompts():
 def put_prompts():
     data = request.get_json(silent=True) or {}
     prompts = data.get("prompts") or {}
-    updates = {k: v for k, v in prompts.items() if k in PROMPT_KEYS and isinstance(v, str)}
+    updates = {PROMPT_ALIASES.get(k, k): v
+               for k, v in prompts.items()
+               if k in PROMPT_KEYS and isinstance(v, str)}
+
+    settings_payload = data.get("settings")
+    if settings_payload is not None:
+        # Solo el dueño (business) cambia la configuración de IA.
+        user = g.get("user") or {}
+        if user.get("role") != "business":
+            return jsonify({"error": "forbidden",
+                            "message": "Solo el dueño del negocio puede cambiar "
+                                       "la configuración de IA."}), 403
+        try:
+            updates.update(_validate_prompt_settings(settings_payload))
+        except ValueError as exc:
+            return jsonify({"error": "bad_request", "message": str(exc)}), 400
+
     business_id = current_business_id()
 
     try:
@@ -143,7 +224,8 @@ def put_prompts():
 
     saved = get_one("SELECT * FROM " + PROMPTS_TABLE + " WHERE id = :id",
                     {"id": row["id"]})
-    return jsonify({"prompts": {k: saved.get(k) for k in PROMPT_KEYS},
+    return jsonify({"prompts": {k: saved.get(PROMPT_ALIASES.get(k, k)) for k in PROMPT_KEYS},
+                    "settings": _prompt_settings(saved),
                     "supported": PROMPT_KEYS})
 
 

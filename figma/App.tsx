@@ -2425,7 +2425,7 @@ function Sidebar({ active, onActive }: { active: string; onActive: (s: string) =
     });
   }, [active]);
   return (
-    <aside className="w-52 flex flex-col flex-shrink-0 bg-white" style={{ borderRight: "1px solid #E2E8F0" }}>
+    <aside className={`w-52 flex-col flex-shrink-0 bg-white ${active === "Preguntas" ? "hidden md:flex" : "flex"}`} style={{ borderRight: "1px solid #E2E8F0" }}>
       <div className="flex items-center gap-2.5 px-5 py-5" style={{ borderBottom: "1px solid #F1F5F9" }}>
         <img src={omnipanelLogo} alt="Omnipanel" className="h-6 w-auto" />
       </div>
@@ -4433,7 +4433,8 @@ function Ventas() {
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 function Dashboard() {
-  const [active, setActive] = useState("Inventario");
+  // Deep link: /preguntas?open={id} entra directo a la conversación.
+  const [active, setActive] = useState(() => (/\/preguntas/i.test(window.location.pathname) || readOpenParam()) ? "Preguntas" : "Inventario");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Product | null>(null);
   const [selectedTab, setSelectedTab] = useState<"producto" | "ml" | "tn">("producto");
@@ -4481,7 +4482,7 @@ function Dashboard() {
       ) : active === "Prompts AI" ? (
         <div className="flex flex-col flex-1 min-w-0"><PromptsAI /></div>
       ) : active === "Preguntas" ? (
-        <div className="flex flex-col flex-1 min-w-0"><ComingSoon title="Preguntas" icon="preguntas" /></div>
+        <Preguntas onOpenProduct={p => openProduct(p, "producto")} onNavigate={setActive} />
       ) : (
       <div className="flex flex-col flex-1 min-w-0">
         <header className="flex items-center gap-3 px-6 py-3 flex-shrink-0 bg-white" style={{ borderBottom: "1px solid #E2E8F0" }}>
@@ -5201,7 +5202,7 @@ function GeneralSettings() {
 // ─── Notificaciones + Scrapfly (settings) ───────────────────────────────────────
 // Backend no existe todavía: mock en memoria contra el contrato de la API.
 
-type NotificationEventKey = "order_confirmed" | "order_cancelled" | "order_delivered" | "scraping_finished" | "label_ready";
+type NotificationEventKey = "order_confirmed" | "order_cancelled" | "order_delivered" | "scraping_finished" | "label_ready" | "message_needs_review";
 interface NotificationEventSetting { whatsapp: boolean; telegram: boolean }
 interface NotifContact { id: string; label: string; destination: string; enabled: boolean }
 type NotifChannel = "whatsapp" | "telegram";
@@ -5228,6 +5229,7 @@ let notifStore: NotificationSettings = {
     order_delivered: { whatsapp: false, telegram: false },
     scraping_finished: { whatsapp: false, telegram: true },
     label_ready: { whatsapp: true, telegram: true },
+    message_needs_review: { whatsapp: true, telegram: true },
   },
 };
 let scrapflyStore: ScrapflySettings = { api_key: null };
@@ -5294,6 +5296,7 @@ const NOTIF_EVENTS: { key: NotificationEventKey; label: string; desc: string; hi
   { key: "order_delivered", label: "Orden entregada", desc: "Cuando el envío llega al comprador." },
   { key: "scraping_finished", label: "Scraping finalizado", desc: "Cuando termina una corrida de búsqueda de competencia." },
   { key: "label_ready", label: "Etiqueta lista para despachar", desc: "Cuando un envío de MercadoLibre pasa a 'Listo para enviar': mandamos la etiqueta en PDF. Si MercadoLibre todavía no la generó, avisamos por texto con el número de orden para descargarla desde la app.", hint: "El PDF viaja como documento adjunto en WhatsApp y Telegram." },
+  { key: "message_needs_review", label: "Pregunta sin responder por la IA", desc: "Cuando una pregunta o mensaje de MercadoLibre queda Para revisar (reclamo, devolución, baja confianza, fallo de envío) o la IA está en Off. Un solo aviso por conversación hasta que el comprador vuelva a escribir.", hint: "Incluye un link directo que abre la conversación en Preguntas." },
 ];
 
 // ── Contactos de notificación: validación ──
@@ -6226,6 +6229,971 @@ function Usuarios() {
 
 // ─── Work-in-progress placeholder ───────────────────────────────────────────────
 
+// ─── Preguntas · Atención al cliente MercadoLibre ──────────────────────────────
+// Mock en memoria contra el contrato /api/mercadolibre/messages. Mismas formas de
+// respuesta y mismos errores {error, message} que el backend.
+
+type MsgKind = "question" | "post_sale";
+type ReplyStatus = "new" | "ai_suggested" | "needs_review" | "answered" | "closed";
+type AiMode = "off" | "suggest" | "autopilot";
+
+interface MsgListItem {
+  id: string; kind: MsgKind; buyer_name: string; product_title: string; last_text: string;
+  reply_status: ReplyStatus; assigned_to: string | null; ai_confidence: number | null;
+  created_at: string; last_activity: string; listing_id: string;
+  last_reply_mode?: "ai" | "human" | null; // opcional: origen de la última respuesta (badge IA/Humano)
+}
+interface MsgReply {
+  author: "buyer" | "seller"; mode: "ai" | "human" | null; text: string;
+  status: "received" | "sent" | "failed" | "draft";
+  audit_verdict: "approved" | "corrected" | null; audit_score: number | null; audit_issues: string[];
+  created_at: string;
+  cited_products?: { title: string; price: number; stock: number }[];
+}
+interface MsgDetail {
+  message: MsgListItem & { listing_id: string; product_id: number; answered_externally?: boolean; closed_reason?: string; review_reason?: string; ai_error?: string };
+  replies: MsgReply[];
+  product: { title: string; price: number; stock: number; listing_status: ChannelStatus };
+}
+
+const ME = "me";
+const minsAgo = (m: number) => new Date(Date.now() - m * 60000).toISOString();
+
+const REPLY_STATUS: Record<ReplyStatus, { label: string; glyph: string; color: string; bg: string }> = {
+  new:          { label: "Nueva",        glyph: "●", color: "#4F46E5", bg: "#EEF2FF" },
+  ai_suggested: { label: "IA sugerida",  glyph: "✨", color: "#7C3AED", bg: "#F5F3FF" },
+  needs_review: { label: "Para revisar", glyph: "⚠", color: "#B45309", bg: "#FEF3C7" },
+  answered:     { label: "Respondida",   glyph: "✓", color: "#16A34A", bg: "#DCFCE7" },
+  closed:       { label: "Cerrada",      glyph: "",  color: "#64748B", bg: "#F1F5F9" },
+};
+const STATUS_ORDER: ReplyStatus[] = ["new", "ai_suggested", "needs_review", "answered", "closed"];
+
+// Estado compartido de la demo (rol de sesión, modo IA, simulación de fallas).
+type CsConfig = { mode: AiMode; min_confidence: number; audit: boolean };
+const csStore = {
+  role: "owner" as "owner" | "employee",
+  config: { mode: "suggest", min_confidence: 75, audit: true } as CsConfig,
+  offline: false,
+  subs: new Set<() => void>(),
+  set(patch: Partial<{ role: "owner" | "employee"; config: CsConfig; offline: boolean }>) { Object.assign(this, patch); this.subs.forEach(f => f()); },
+};
+function useCsStore() {
+  const [, force] = useState(0);
+  useEffect(() => { const f = () => force(n => n + 1); csStore.subs.add(f); return () => { csStore.subs.delete(f); }; }, []);
+  return csStore;
+}
+
+const r = (p: Partial<MsgReply> & Pick<MsgReply, "author" | "text" | "created_at">): MsgReply =>
+  ({ mode: null, status: p.author === "buyer" ? "received" : "sent", audit_verdict: null, audit_score: null, audit_issues: [], ...p });
+
+let MSG_DB: MsgDetail[] = [
+  {
+    message: { id: "Q-9012", kind: "question", buyer_name: "Martina R.", product_title: "Set Tabla Gourmet", last_text: "Hola! La tabla viene con los chocolates incluidos o se compran aparte? Hacen factura A?", reply_status: "ai_suggested", assigned_to: null, ai_confidence: 0.91, created_at: minsAgo(6), last_activity: minsAgo(6), last_reply_mode: null, listing_id: "MLA1000000822", product_id: 6 },
+    replies: [
+      r({ author: "buyer", text: "Hola! La tabla viene con los chocolates incluidos o se compran aparte? Hacen factura A?", created_at: minsAgo(6) }),
+      r({ author: "seller", mode: "ai", status: "draft", text: "¡Hola Martina! Sí, la tabla incluye la selección de chocolates artesanales, no tenés que comprar nada aparte. Hacemos factura A: cuando confirmes la compra, mandanos tu CUIT por la mensajería de MercadoLibre. ¡Saludos!", audit_verdict: "approved", audit_score: 0.91, created_at: minsAgo(5),
+        cited_products: [{ title: "Set Tabla Gourmet", price: 31000, stock: 1 }] }),
+    ],
+    product: { title: "Set Tabla Gourmet", price: 31000, stock: 1, listing_status: "published" },
+  },
+  {
+    message: { id: "M-4410", kind: "post_sale", buyer_name: "Julián P.", product_title: "Paño Decoración Estampado", last_text: "Me llegó con una mancha, quiero hacer la devolución.", reply_status: "needs_review", assigned_to: null, ai_confidence: null, created_at: minsAgo(38), last_activity: minsAgo(14), last_reply_mode: "human", listing_id: "MLA1000000274", product_id: 2, review_reason: "Devolución: la IA no responde reclamos ni devoluciones.", ai_error: "La IA no pudo responder: el mensaje es una devolución y requiere una persona." },
+    replies: [
+      r({ author: "buyer", text: "Hola, ya me llegó el paño.", created_at: minsAgo(38) }),
+      r({ author: "seller", mode: "human", text: "¡Genial Julián! Cualquier cosa nos escribís.", created_at: minsAgo(30) }),
+      r({ author: "buyer", text: "Me llegó con una mancha, quiero hacer la devolución.", created_at: minsAgo(14) }),
+    ],
+    product: { title: "Paño Decoración Estampado", price: 3200, stock: 0, listing_status: "published" },
+  },
+  {
+    message: { id: "Q-9008", kind: "question", buyer_name: "Lucía F.", product_title: "Promo Mate Día del Padre", last_text: "Cuánto tarda en llegar a Córdoba capital?", reply_status: "needs_review", assigned_to: ME, ai_confidence: 0.42, created_at: minsAgo(52), last_activity: minsAgo(20), last_reply_mode: "ai", listing_id: "MLA1000000548", product_id: 4, review_reason: "No se pudo enviar la respuesta a MercadoLibre." },
+    replies: [
+      r({ author: "buyer", text: "Cuánto tarda en llegar a Córdoba capital?", created_at: minsAgo(52) }),
+      r({ author: "seller", mode: "ai", status: "failed", text: "¡Hola Lucía! A Córdoba capital llega en 3 a 5 días hábiles con MercadoEnvíos. ¡Saludos!", audit_verdict: "corrected", audit_score: 0.42, audit_issues: ["Se quitó una promesa de envío gratis que no está configurada."], created_at: minsAgo(20) }),
+    ],
+    product: { title: "Promo Mate Día del Padre", price: 10500, stock: 0, listing_status: "paused" },
+  },
+  {
+    message: { id: "Q-9015", kind: "question", buyer_name: "Diego S.", product_title: "Quesera Plástico", last_text: "Es apta lavavajillas? Tienen en otro color?", reply_status: "new", assigned_to: null, ai_confidence: null, created_at: minsAgo(2), last_activity: minsAgo(2), last_reply_mode: null, listing_id: "MLA1000000137", product_id: 1 },
+    replies: [r({ author: "buyer", text: "Es apta lavavajillas? Tienen en otro color?", created_at: minsAgo(2) })],
+    product: { title: "Quesera Plástico", price: 2500, stock: 0, listing_status: "failed" },
+  },
+  {
+    message: { id: "Q-9001", kind: "question", buyer_name: "Sofía M.", product_title: "Set Vaso + Perfume", last_text: "Viene en caja de regalo?", reply_status: "answered", assigned_to: null, ai_confidence: 0.95, created_at: minsAgo(180), last_activity: minsAgo(172), last_reply_mode: "ai", listing_id: "MLA1000000411", product_id: 3 },
+    replies: [
+      r({ author: "buyer", text: "Viene en caja de regalo?", created_at: minsAgo(180) }),
+      r({ author: "seller", mode: "ai", text: "¡Hola Sofía! Sí, viene en caja de regalo lista para entregar. ¡Saludos!", audit_verdict: "approved", audit_score: 0.95, created_at: minsAgo(172) }),
+    ],
+    product: { title: "Set Vaso + Perfume", price: 15500, stock: 0, listing_status: "unpublished" },
+  },
+  {
+    message: { id: "Q-8994", kind: "question", buyer_name: "Ramiro G.", product_title: "Set Tabla Gourmet", last_text: "Hacen envíos a Rosario?", reply_status: "answered", assigned_to: null, ai_confidence: null, created_at: minsAgo(400), last_activity: minsAgo(390), last_reply_mode: "human", listing_id: "MLA1000000822", product_id: 6, answered_externally: true },
+    replies: [r({ author: "buyer", text: "Hacen envíos a Rosario?", created_at: minsAgo(400) })],
+    product: { title: "Set Tabla Gourmet", price: 31000, stock: 1, listing_status: "published" },
+  },
+  {
+    message: { id: "M-4398", kind: "post_sale", buyer_name: "Carla V.", product_title: "Set Tabla Gourmet", last_text: "Necesito cambiar la dirección de entrega.", reply_status: "ai_suggested", assigned_to: ME, ai_confidence: 0.78, created_at: minsAgo(95), last_activity: minsAgo(95), last_reply_mode: null, listing_id: "MLA1000000822", product_id: 6 },
+    replies: [
+      r({ author: "buyer", text: "Necesito cambiar la dirección de entrega.", created_at: minsAgo(95) }),
+      r({ author: "seller", mode: "ai", status: "draft", text: "¡Hola Carla! Todavía no despachamos tu pedido, así que podemos cambiar la dirección. Pasanos la nueva dirección completa por acá y la actualizamos.", audit_verdict: "corrected", audit_score: 0.78, audit_issues: ["Se quitó un pedido de número de teléfono (dato personal fuera de la mensajería).", "Se reemplazó \"mañana sale\" por un plazo no comprometido."], created_at: minsAgo(94) }),
+    ],
+    product: { title: "Set Tabla Gourmet", price: 31000, stock: 1, listing_status: "published" },
+  },
+  {
+    message: { id: "Q-8970", kind: "question", buyer_name: "Usuario eliminado", product_title: "Promo Taza + Perfume", last_text: "Tienen stock?", reply_status: "closed", assigned_to: null, ai_confidence: null, created_at: minsAgo(2900), last_activity: minsAgo(2880), last_reply_mode: null, listing_id: "MLA1000000685", product_id: 5, closed_reason: "MercadoLibre eliminó esta pregunta (el comprador cerró su cuenta)." },
+    replies: [r({ author: "buyer", text: "Tienen stock?", created_at: minsAgo(2900) })],
+    product: { title: "Promo Taza + Perfume", price: 15000, stock: 0, listing_status: "unpublished" },
+  },
+];
+const sendFailOnce = new Set(["Q-9008"]);
+const suggestFailOnce = new Set(["Q-9015"]);
+
+// Historial de demo: conversaciones ya resueltas para que la bandeja tenga volumen real y se pagine.
+(() => {
+  const buyers = ["Sofía M.", "Tomás G.", "Valentina L.", "Mateo C.", "Camila B.", "Agustín V.", "Florencia N.", "Nicolás H.", "Paula D.", "Federico A.", "Carla T.", "Ignacio O."];
+  const prods = [
+    { title: "Set Tabla Gourmet", price: 31000, stock: 1, listing_id: "MLA1000000822", product_id: 6 },
+    { title: "Quesera Plástico", price: 2500, stock: 0, listing_id: "MLA1000000137", product_id: 1 },
+    { title: "Promo Mate Día del Padre", price: 10500, stock: 0, listing_id: "MLA1000000548", product_id: 4 },
+    { title: "Paño Decoración Estampado", price: 3200, stock: 0, listing_id: "MLA1000000274", product_id: 2 },
+  ];
+  const qs = [["¿Hacen envíos a Rosario?", "¡Hola! Sí, enviamos a todo el país con MercadoEnvíos. ¡Saludos!"], ["¿Tienen stock para comprar 3?", "¡Hola! Por ahora tenemos stock limitado, consultanos antes de ofertar."], ["¿Aceptan cuotas sin interés?", "¡Hola! Sí, MercadoLibre ofrece cuotas según tu banco."], ["¿Se puede retirar en persona?", "¡Hola! Por ahora solo hacemos envíos. ¡Gracias!"]];
+  const ps = [["¿Cuándo despachan mi compra?", "¡Hola! Sale hoy por la tarde, te llega el código de seguimiento."], ["Ya me llegó, muchas gracias!", "¡Gracias a vos! Que lo disfrutes."], ["¿Me pueden mandar la factura?", "¡Hola! Ya la adjuntamos en el detalle de la compra."]];
+  for (let i = 0; i < 52; i++) {
+    const kind: MsgKind = i % 3 === 2 ? "post_sale" : "question";
+    const [q, a] = (kind === "question" ? qs : ps)[i % (kind === "question" ? qs.length : ps.length)];
+    const pr = prods[i % prods.length]; const t = 180 + i * 97;
+    const status: ReplyStatus = i % 9 === 4 ? "closed" : "answered";
+    const mode: "human" | "ai" = i % 4 === 0 ? "human" : "ai";
+    MSG_DB.push({
+      message: { id: `${kind === "question" ? "Q" : "M"}-${8000 + i}`, kind, buyer_name: buyers[i % buyers.length], product_title: pr.title, last_text: q, reply_status: status, assigned_to: null, ai_confidence: null, created_at: minsAgo(t + 10), last_activity: minsAgo(t), last_reply_mode: mode, listing_id: pr.listing_id, product_id: pr.product_id, ...(status === "closed" ? { closed_reason: "La publicación se pausó." } : {}) },
+      replies: [r({ author: "buyer", text: q, created_at: minsAgo(t + 10) }), r({ author: "seller", mode, text: a, created_at: minsAgo(t) })],
+      product: { title: pr.title, price: pr.price, stock: pr.stock, listing_status: "published" },
+    });
+  }
+})();
+
+const toItem = (d: MsgDetail): MsgListItem => {
+  const { id, kind, buyer_name, product_title, last_text, reply_status, assigned_to, ai_confidence, created_at, last_activity, last_reply_mode, listing_id } = d.message;
+  return { id, kind, buyer_name, product_title, last_text, reply_status, assigned_to, ai_confidence, created_at, last_activity, last_reply_mode, listing_id };
+};
+const csGuard = () => { if (csStore.offline) throw new ApiError(502, "network", "Sin conexión con el servidor. Revisá tu internet y volvé a intentar."); };
+const findMsg = (id: string) => { const d = MSG_DB.find(m => m.message.id === id); if (!d) throw new ApiError(404, "not_found", "No encontramos esta conversación. Puede que MercadoLibre la haya eliminado."); return d; };
+const lockedMsg = (d: MsgDetail) => {
+  if (d.message.reply_status === "closed") throw new ApiError(409, "closed", "La conversación está cerrada en MercadoLibre.");
+  if (d.message.answered_externally) throw new ApiError(409, "already_answered", "Esta pregunta ya se respondió desde MercadoLibre.");
+};
+
+const messagesApi = {
+  async list(p: { kind: MsgKind; reply_status: ReplyStatus[]; q: string; page: number; page_size: number }): Promise<{ items: MsgListItem[]; page: number; total: number }> {
+    await wait(550); csGuard();
+    const q = p.q.trim().toLowerCase();
+    const items = MSG_DB.map(toItem)
+      .filter(m => m.kind === p.kind && (p.reply_status.length === 0 || p.reply_status.includes(m.reply_status)))
+      .filter(m => !q || m.buyer_name.toLowerCase().includes(q) || m.product_title.toLowerCase().includes(q))
+      .sort((a, b) => b.last_activity.localeCompare(a.last_activity));
+    return { items: items.slice((p.page - 1) * p.page_size, p.page * p.page_size), page: p.page, total: items.length };
+  },
+  async get(id: string): Promise<MsgDetail> { await wait(450); csGuard(); return structuredClone(findMsg(id)); },
+  async aiSuggest(id: string): Promise<{ reply: MsgReply; audit: { verdict: "approved" | "corrected"; score: number; issues: string[] } }> {
+    await wait(1400); csGuard();
+    const d = findMsg(id); lockedMsg(d);
+    if (suggestFailOnce.has(id)) { suggestFailOnce.delete(id); throw new ApiError(502, "ai_unavailable", "El servicio de IA no respondió a tiempo."); }
+    if (/devoluci|reclamo|mancha|roto/i.test(d.message.last_text)) {
+      d.message.reply_status = "needs_review";
+      throw new ApiError(400, "needs_human", "La IA no pudo responder: el mensaje es un reclamo o una devolución y requiere una persona.");
+    }
+    const score = 0.86;
+    const reply = r({ author: "seller", mode: "ai", status: "draft", text: `¡Hola ${d.message.buyer_name.split(" ")[0]}! Gracias por tu consulta. ${d.product.stock > 0 ? `Tenemos ${d.product.stock} unidad${d.product.stock > 1 ? "es" : ""} disponible${d.product.stock > 1 ? "s" : ""} para envío inmediato.` : "En este momento estamos reponiendo stock; te avisamos apenas ingrese."} Cualquier otra duda, escribinos. ¡Saludos!`, audit_verdict: csStore.config.audit ? "approved" : null, audit_score: score, created_at: new Date().toISOString(), cited_products: [{ title: d.product.title, price: d.product.price, stock: d.product.stock }] });
+    d.replies = d.replies.filter(x => x.status !== "draft").concat(reply);
+    d.message.reply_status = "ai_suggested"; d.message.ai_confidence = score; d.message.ai_error = undefined; d.message.review_reason = undefined;
+    return { reply, audit: { verdict: "approved", score, issues: [] } };
+  },
+  async improve(id: string, text: string): Promise<{ text: string }> {
+    await wait(1000); csGuard();
+    const d = findMsg(id);
+    if (!text.trim()) throw new ApiError(400, "empty", "Escribí algo para que la IA lo pueda mejorar.");
+    let t = text.trim().replace(/\s+/g, " ");
+    t = t.charAt(0).toUpperCase() + t.slice(1);
+    if (!/[.!?]$/.test(t)) t += ".";
+    if (!/^(¡?hola)/i.test(t)) t = `¡Hola ${d.message.buyer_name.split(" ")[0]}! ${t}`;
+    if (!/saludos/i.test(t)) t += " ¡Saludos!";
+    return { text: t };
+  },
+  async reply(id: string, text: string): Promise<{ reply: MsgReply }> {
+    await wait(1100); csGuard();
+    const d = findMsg(id); lockedMsg(d);
+    if (!text.trim()) throw new ApiError(400, "empty", "La respuesta está vacía.");
+    if (text.length > 2000) throw new ApiError(400, "too_long", "MercadoLibre acepta hasta 2000 caracteres por respuesta.");
+    const draft = d.replies.find(x => x.status === "draft");
+    const mode: "ai" | "human" = draft && draft.text === text ? "ai" : "human";
+    if (sendFailOnce.has(id)) { sendFailOnce.delete(id); throw new ApiError(502, "ml_unavailable", "MercadoLibre no respondió (error 502). Tu respuesta no se envió."); }
+    const reply = r({ author: "seller", mode, text, audit_verdict: draft?.audit_verdict ?? null, audit_score: draft?.audit_score ?? null, audit_issues: draft?.audit_issues ?? [], created_at: new Date().toISOString() });
+    d.replies = d.replies.filter(x => x.status !== "draft" && x.status !== "failed").concat(reply);
+    Object.assign(d.message, { reply_status: "answered", last_reply_mode: mode, last_activity: reply.created_at, review_reason: undefined, ai_error: undefined });
+    return { reply };
+  },
+  async discardSuggestion(id: string): Promise<{ ok: true }> {
+    await wait(400); csGuard();
+    const d = findMsg(id);
+    d.replies = d.replies.filter(x => x.status !== "draft");
+    if (d.message.reply_status === "ai_suggested") d.message.reply_status = "new";
+    return { ok: true };
+  },
+  async assign(id: string): Promise<{ assigned_to: string | null }> {
+    await wait(400); csGuard();
+    const d = findMsg(id);
+    d.message.assigned_to = d.message.assigned_to === ME ? null : ME;
+    return { assigned_to: d.message.assigned_to };
+  },
+};
+
+const QUICK_REPLIES = [
+  { label: "Stock disponible", text: "¡Hola! Sí, tenemos stock disponible para envío inmediato. ¡Saludos!" },
+  { label: "Plazo de envío", text: "¡Hola! El envío demora entre 3 y 5 días hábiles con MercadoEnvíos. ¡Saludos!" },
+  { label: "Factura A", text: "¡Hola! Sí, hacemos factura A. Cuando confirmes la compra, mandanos tu CUIT por la mensajería. ¡Saludos!" },
+  { label: "Gracias por tu compra", text: "¡Gracias por tu compra! Cualquier duda, escribinos por acá." },
+];
+
+// Enlace a la conversación en MercadoLibre (preventa: pregunta de la publicación · postventa: mensajería de la venta).
+const mlConversationUrl = (m: { id: string; kind: MsgKind; listing_id: string }) =>
+  m.kind === "question"
+    ? `https://www.mercadolibre.com.ar/preguntas/vendedor?item=${m.listing_id}&question=${m.id}`
+    : `https://www.mercadolibre.com.ar/mensajes/${m.id}`;
+function ExtLinkIcon({ size = 12 }: { size?: number }) {
+  return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3h4v4M13 3 7 9M11 9.5V13H3V5h3.5" /></svg>;
+}
+
+function fmtWhen(iso: string) {
+  const d = new Date(iso); const diff = (Date.now() - d.getTime()) / 60000;
+  if (diff < 1) return "ahora";
+  if (diff < 60) return `hace ${Math.round(diff)} min`;
+  const today = new Date(); const sameDay = d.toDateString() === today.toDateString();
+  const hm = d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" }).replace(/\s*([ap])\.\s*m\./i, " $1.m.").replace(/\s/g, "\u00a0");
+  if (sameDay) return hm;
+  const y = new Date(today); y.setDate(today.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return `ayer ${hm}`;
+  return d.toLocaleDateString("es-AR", { day: "2-digit", month: "short" });
+}
+
+const SpinIcon = ({ size = 12 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 12 12" fill="none" className="animate-spin flex-shrink-0"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.5" /><path d="M10.5 6A4.5 4.5 0 0 0 6 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+);
+const SparkIcon = ({ size = 12 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className="flex-shrink-0"><path d="M8 1.5l1.4 4.1 4.1 1.4-4.1 1.4L8 12.5 6.6 8.4 2.5 7l4.1-1.4L8 1.5zM13 11l.6 1.4 1.4.6-1.4.6L13 15l-.6-1.4L11 13l1.4-.6L13 11z" fill="currentColor" /></svg>
+);
+
+function ReplyStatusChip({ status, compact }: { status: ReplyStatus; compact?: boolean }) {
+  const s = REPLY_STATUS[status];
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full font-semibold whitespace-nowrap ${compact ? "px-1.5 py-px text-[10px]" : "px-2 py-0.5 text-[11px]"}`} style={{ color: s.color, background: s.bg }}>
+      {s.glyph && <span aria-hidden style={{ fontSize: compact ? 8 : 9 }}>{s.glyph}</span>}{s.label}
+    </span>
+  );
+}
+function ModeBadge({ mode }: { mode: "ai" | "human" }) {
+  return mode === "ai"
+    ? <span className="inline-flex items-center gap-0.5 px-1.5 py-px rounded text-[10px] font-bold" style={{ color: "#7C3AED", background: "#F5F3FF" }}><SparkIcon size={9} />IA</span>
+    : <span className="inline-flex items-center px-1.5 py-px rounded text-[10px] font-bold" style={{ color: "#0369A1", background: "#E0F2FE" }}>Humano</span>;
+}
+function MineBadge() {
+  return <span className="inline-flex items-center gap-1 px-1.5 py-px rounded text-[10px] font-semibold" style={{ color: "#0A1628", background: "#F1F5F9" }}>
+    <svg width="9" height="9" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="5.5" r="2.8" stroke="currentColor" strokeWidth="1.6" /><path d="M2.5 14c.8-2.8 3-4.2 5.5-4.2s4.7 1.4 5.5 4.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+    Asignada a mí</span>;
+}
+
+function CsErrorState({ title, message, onRetry, busy }: { title: string; message: string; onRetry: () => void; busy?: boolean }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 px-6 py-12">
+      <span className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: "#FEF2F2", color: "#DC2626" }}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M2 8.8a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 9-2.6M8.5 16a5 5 0 0 1 5-1M12 20h.01M3 3l18 18" /></svg>
+      </span>
+      <div>
+        <p className="text-sm font-bold" style={{ color: "#0A1628" }}>{title}</p>
+        <p className="text-xs mt-1 max-w-xs" style={{ color: "#64748B" }}>{message}</p>
+      </div>
+      <button onClick={onRetry} disabled={busy} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white" style={{ background: "#4F46E5" }}>
+        {busy && <SpinIcon />} Reintentar
+      </button>
+    </div>
+  );
+}
+
+// ── Lista ──
+function ConversationItem({ m, selected, onClick }: { m: MsgListItem; selected: boolean; onClick: () => void }) {
+  const unread = m.reply_status === "new" || m.reply_status === "needs_review";
+  return (
+    <button onClick={onClick} aria-current={selected}
+      className="w-full text-left px-4 py-3 flex flex-col gap-1.5 transition-colors"
+      style={{ background: selected ? "#EEF2FF" : "white", borderLeft: `3px solid ${selected ? "#4F46E5" : "transparent"}`, borderBottom: "1px solid #F1F5F9" }}
+      onMouseEnter={e => { if (!selected) e.currentTarget.style.background = "#F8FAFC"; }}
+      onMouseLeave={e => { if (!selected) e.currentTarget.style.background = "white"; }}>
+      <div className="flex items-center gap-2">
+        {unread && <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: REPLY_STATUS[m.reply_status].color }} aria-hidden />}
+        <span className={`text-sm truncate ${unread ? "font-bold" : "font-semibold"}`} style={{ color: "#0A1628" }}>{m.buyer_name}</span>
+        <span className="ml-auto text-[11px] tabular-nums flex-shrink-0" style={{ color: unread ? "#4F46E5" : "#94A3B8", fontWeight: unread ? 600 : 400 }}>{fmtWhen(m.last_activity)}</span>
+      </div>
+      <span className="text-[11px] truncate" style={{ color: "#64748B" }}>{m.product_title}</span>
+      <span className="text-xs line-clamp-2" style={{ color: unread ? "#334155" : "#94A3B8" }}>{m.last_text}</span>
+      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+        <ReplyStatusChip status={m.reply_status} compact />
+        {m.last_reply_mode && <ModeBadge mode={m.last_reply_mode} />}
+        {m.assigned_to === ME && <MineBadge />}
+      </div>
+    </button>
+  );
+}
+
+function ListSkeleton() {
+  return (
+    <div aria-busy="true" aria-label="Cargando conversaciones">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div key={i} className="px-4 py-3.5 flex flex-col gap-2 animate-pulse" style={{ borderBottom: "1px solid #F1F5F9" }}>
+          <div className="flex justify-between"><div className="h-3 w-28 rounded bg-slate-200" /><div className="h-2.5 w-10 rounded bg-slate-100" /></div>
+          <div className="h-2.5 w-40 rounded bg-slate-100" />
+          <div className="h-2.5 w-full rounded bg-slate-100" />
+          <div className="flex gap-1.5"><div className="h-4 w-16 rounded-full bg-slate-100" /><div className="h-4 w-8 rounded bg-slate-100" /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Detalle ──
+function ThreadBubble({ rep }: { rep: MsgReply }) {
+  const out = rep.author === "seller";
+  const failed = rep.status === "failed";
+  return (
+    <div className={`flex flex-col gap-1 max-w-[86%] ${out ? "self-end items-end" : "self-start items-start"}`}>
+      <div className="px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap"
+        style={out
+          ? { background: failed ? "#FEF2F2" : "#4F46E5", color: failed ? "#7F1D1D" : "white", border: failed ? "1px dashed #FCA5A5" : "none", borderRadius: "16px 16px 4px 16px" }
+          : { background: "white", color: "#0A1628", border: "1px solid #E2E8F0", borderRadius: "16px 16px 16px 4px" }}>
+        {rep.text}
+      </div>
+      <div className="flex items-center gap-1.5 text-[10.5px]" style={{ color: "#94A3B8" }}>
+        {out && rep.mode && <ModeBadge mode={rep.mode} />}
+        <span className="tabular-nums">{fmtWhen(rep.created_at)}</span>
+        {out && (failed
+          ? <span className="font-semibold" style={{ color: "#DC2626" }}>· No enviada</span>
+          : <span className="inline-flex items-center gap-0.5">· Enviada
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M3 8.5l2.5 2.5L11 5.5M7.5 11l.5.5L13.5 5.5" stroke="#16A34A" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </span>)}
+      </div>
+    </div>
+  );
+}
+
+function Notice({ tone, title, children, action }: { tone: "info" | "warn" | "error" | "lock"; title: string; children?: ReactNode; action?: ReactNode }) {
+  const t = { info: ["#EFF6FF", "#BFDBFE", "#1D4ED8"], warn: ["#FFFBEB", "#FDE68A", "#B45309"], error: ["#FEF2F2", "#FECACA", "#B91C1C"], lock: ["#F8FAFC", "#E2E8F0", "#475569"] }[tone];
+  return (
+    <div role={tone === "error" ? "alert" : "status"} className="flex items-start gap-2.5 rounded-xl px-3.5 py-3" style={{ background: t[0], border: `1px solid ${t[1]}` }}>
+      <span className="mt-0.5 flex-shrink-0" style={{ color: t[2] }}>
+        {tone === "lock"
+          ? <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="currentColor" strokeWidth="1.4" /></svg>
+          : <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.3" /><path d="M8 4.8v3.7M8 10.8h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>}
+      </span>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-bold" style={{ color: t[2] }}>{title}</p>
+        {children && <div className="text-xs mt-0.5 leading-relaxed" style={{ color: "#475569" }}>{children}</div>}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function SuggestionBlock({ draft, aiError, mode, busy, regenerating, sendError, onSend, onDiscard, onRetry, textRef }: {
+  draft: MsgReply | null; aiError: string | null; mode: AiMode; busy: "send" | "discard" | null; regenerating: boolean; sendError: string | null;
+  onSend: (t: string) => void; onDiscard: () => void; onRetry: () => void; textRef: React.RefObject<HTMLTextAreaElement | null>;
+}) {
+  const [text, setText] = useState(draft?.text ?? "");
+  useEffect(() => { setText(draft?.text ?? ""); }, [draft]);
+  if (mode === "off" && !draft && !aiError) return null;
+  const conf = draft?.audit_score != null ? Math.round(draft.audit_score * 100) : null;
+  const low = conf != null && conf < csStore.config.min_confidence;
+
+  return (
+    <section aria-label="Sugerencia de IA" className="rounded-2xl overflow-hidden" style={{ border: "1px solid #DDD6FE", background: "#FDFCFF" }}>
+      <header className="flex items-center gap-2 px-4 py-2.5" style={{ borderBottom: "1px solid #EDE9FE", background: "#F5F3FF" }}>
+        <span style={{ color: "#7C3AED" }}><SparkIcon size={13} /></span>
+        <span className="text-xs font-bold" style={{ color: "#5B21B6" }}>Sugerencia de IA</span>
+        {draft && !regenerating && conf != null && (
+          <span className="ml-auto inline-flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: low ? "#B45309" : "#475569" }} title={`Umbral mínimo: ${csStore.config.min_confidence}%`}>
+            <span className="w-12 h-1.5 rounded-full overflow-hidden" style={{ background: "#EDE9FE" }}>
+              <span className="block h-full rounded-full" style={{ width: `${conf}%`, background: low ? "#F59E0B" : "#7C3AED" }} />
+            </span>
+            Confianza {conf}%
+          </span>
+        )}
+      </header>
+
+      <div className="p-4 flex flex-col gap-3">
+        {regenerating ? (
+          <div className="flex flex-col gap-2 py-2" aria-busy="true">
+            <span className="inline-flex items-center gap-2 text-xs font-medium" style={{ color: "#7C3AED" }}><SpinIcon /> Generando borrador y auditoría…</span>
+            <div className="h-2.5 rounded bg-violet-100 animate-pulse w-full" />
+            <div className="h-2.5 rounded bg-violet-100 animate-pulse w-11/12" />
+            <div className="h-2.5 rounded bg-violet-100 animate-pulse w-2/3" />
+          </div>
+        ) : !draft ? (
+          <div className="flex flex-col items-start gap-2">
+            <p className="text-sm font-semibold" style={{ color: "#0A1628" }}>No pudimos generar una sugerencia</p>
+            <p className="text-xs" style={{ color: "#64748B" }}>{aiError ?? "La IA todavía no procesó este mensaje."}</p>
+            <button onClick={onRetry} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold" style={{ color: "#6D28D9", border: "1px solid #DDD6FE", background: "white" }}>
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              Reintentar IA
+            </button>
+          </div>
+        ) : (
+          <>
+            {draft.audit_verdict && (
+              <div className="flex items-start gap-2 flex-wrap">
+                {draft.audit_verdict === "approved"
+                  ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold" style={{ color: "#16A34A", background: "#DCFCE7" }}>✓ Aprobada por el auditor</span>
+                  : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold" style={{ color: "#B45309", background: "#FEF3C7" }}>✎ Corregida por el auditor</span>}
+                {low && <span className="text-[11px] font-medium" style={{ color: "#B45309" }}>Debajo del umbral de {csStore.config.min_confidence}%: revisala antes de enviar.</span>}
+              </div>
+            )}
+            {draft.audit_issues.length > 0 && (
+              <ul className="flex flex-col gap-1 rounded-lg px-3 py-2" style={{ background: "#FFFBEB" }}>
+                {draft.audit_issues.map((iss, i) => (
+                  <li key={i} className="flex gap-1.5 text-[11.5px]" style={{ color: "#78350F" }}><span aria-hidden>•</span>{iss}</li>
+                ))}
+              </ul>
+            )}
+            <textarea ref={textRef} value={text} onChange={e => setText(e.target.value)} rows={4} aria-label="Texto de la respuesta sugerida"
+              className="w-full px-3.5 py-3 text-[13px] rounded-xl outline-none resize-y leading-relaxed"
+              style={{ border: "1px solid #E2E8F0", background: "white", color: "#0A1628" }}
+              onFocus={e => { e.target.style.borderColor = "#7C3AED"; e.target.style.boxShadow = "0 0 0 3px rgba(124,58,237,0.12)"; }}
+              onBlur={e => { e.target.style.borderColor = "#E2E8F0"; e.target.style.boxShadow = "none"; }} />
+            {draft.cited_products && draft.cited_products.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "#94A3B8" }}>Productos citados</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {draft.cited_products.map(cp => (
+                    <span key={cp.title} className="inline-flex items-center gap-1.5 pl-2.5 pr-2 py-1 rounded-full text-[11px]" style={{ border: "1px solid #E2E8F0", background: "white" }}>
+                      <span className="font-semibold" style={{ color: "#0A1628" }}>{cp.title}</span>
+                      <span className="tabular-nums" style={{ color: "#475569" }}>{fmt(cp.price)}</span>
+                      <span className="tabular-nums px-1.5 rounded-full text-[10px] font-semibold" style={{ color: cp.stock > 0 ? "#16A34A" : "#DC2626", background: cp.stock > 0 ? "#DCFCE7" : "#FEE2E2" }}>{cp.stock > 0 ? `${cp.stock} en stock` : "Sin stock"}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {sendError && <Notice tone="error" title="No se pudo enviar la respuesta">{sendError} Tocá Enviar para reintentar.</Notice>}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={() => onSend(text)} disabled={!!busy || !text.trim()}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-semibold text-white"
+                style={{ background: busy === "send" ? "#818CF8" : "#4F46E5", cursor: busy ? "wait" : "pointer" }}>
+                {busy === "send" ? <><SpinIcon /> Enviando…</> : sendError ? "Reintentar envío" : "Enviar"}
+              </button>
+              <button onClick={onDiscard} disabled={!!busy} className="px-3.5 py-2.5 rounded-xl text-sm font-medium" style={{ color: "#475569", border: "1px solid #E2E8F0", background: "white" }}>
+                {busy === "discard" ? "Descartando…" : "Descartar"}
+              </button>
+              <button onClick={onRetry} disabled={!!busy} className="ml-auto inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold" style={{ color: "#6D28D9" }}>
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                Reintentar IA
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Composer({ locked, lockMsg, busy, onSend, onImprove, sendError, inputRef }: {
+  locked: boolean; lockMsg: string; busy: "send" | "improve" | null; sendError: string | null;
+  onSend: (t: string, clear: () => void) => void; onImprove: (t: string, set: (v: string) => void) => void; inputRef: React.RefObject<HTMLTextAreaElement | null>;
+}) {
+  const [text, setText] = useState("");
+  if (locked) return (
+    <div className="px-4 py-3 bg-white" style={{ borderTop: "1px solid #E2E8F0" }}>
+      <Notice tone="lock" title="Solo lectura">{lockMsg}</Notice>
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-2 px-3 md:px-4 pt-2.5 pb-3 bg-white" style={{ borderTop: "1px solid #E2E8F0", paddingBottom: "max(12px, env(safe-area-inset-bottom))" }}>
+      {sendError && <Notice tone="error" title="No se pudo enviar la respuesta" action={<button onClick={() => onSend(text, () => setText(""))} className="text-xs font-bold underline flex-shrink-0" style={{ color: "#B91C1C" }}>Reintentar</button>}>{sendError}</Notice>}
+      <div className="flex gap-1.5 overflow-x-auto -mx-1 px-1 pb-0.5" style={{ scrollbarWidth: "none" }} aria-label="Respuestas rápidas">
+        {QUICK_REPLIES.map(q => (
+          <button key={q.label} onClick={() => { setText(q.text); inputRef.current?.focus(); }}
+            className="flex-shrink-0 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors hover:bg-slate-100" style={{ border: "1px solid #E2E8F0", color: "#475569" }}>
+            {q.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-end gap-2">
+        <div className="flex-1 relative">
+          <textarea ref={inputRef} value={text} onChange={e => setText(e.target.value)} rows={2} placeholder="Escribí tu respuesta…" aria-label="Respuesta manual"
+            disabled={busy === "improve"}
+            onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSend(text, () => setText("")); }}
+            className="w-full px-3.5 py-2.5 text-[13px] rounded-xl outline-none resize-none leading-relaxed"
+            style={{ border: "1px solid #E2E8F0", background: busy === "improve" ? "#F8FAFC" : "white", color: "#0A1628", maxHeight: 160 }}
+            onFocus={e => { e.target.style.borderColor = "#4F46E5"; e.target.style.boxShadow = "0 0 0 3px rgba(79,70,229,0.1)"; }}
+            onBlur={e => { e.target.style.borderColor = "#E2E8F0"; e.target.style.boxShadow = "none"; }} />
+          {busy === "improve" && <span className="absolute inset-0 flex items-center justify-center gap-2 text-xs font-medium rounded-xl" style={{ color: "#7C3AED", background: "rgba(255,255,255,0.7)" }}><SpinIcon /> Mejorando con IA…</span>}
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <button onClick={() => onImprove(text, setText)} disabled={!text.trim() || !!busy}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-opacity"
+          style={{ color: "#6D28D9", border: "1px solid #DDD6FE", background: "#FDFCFF", opacity: !text.trim() ? 0.5 : 1 }}>
+          <SparkIcon size={11} /> Mejorar con IA
+        </button>
+        <span className="hidden md:inline text-[10.5px]" style={{ color: "#CBD5E1" }}>⌘/Ctrl + Enter para enviar</span>
+        <button onClick={() => onSend(text, () => setText(""))} disabled={!text.trim() || !!busy}
+          className="ml-auto inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-white"
+          style={{ background: !text.trim() ? "#C7D2FE" : busy === "send" ? "#818CF8" : "#4F46E5" }}>
+          {busy === "send" ? <><SpinIcon /> Enviando…</> : <>Enviar <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M2 8 14 2l-4 12-2.5-4.5L2 8z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" /></svg></>}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ConversationDetail({ id, focusOnOpen, onBack, onChanged, onOpenProduct, toast }: {
+  id: string; focusOnOpen: boolean;  onBack: () => void; onChanged: (patch: Partial<MsgListItem> & { id: string }) => void;
+  onOpenProduct: (p: Product) => void; toast: (t: { tone: "ok" | "err"; message: string }) => void;
+}) {
+  const store = useCsStore();
+  const [data, setData] = useState<MsgDetail | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [regenerating, setRegenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [sugBusy, setSugBusy] = useState<"send" | "discard" | null>(null);
+  const [sugErr, setSugErr] = useState<string | null>(null);
+  const [compBusy, setCompBusy] = useState<"send" | "improve" | null>(null);
+  const [compErr, setCompErr] = useState<string | null>(null);
+  const [assigning, setAssigning] = useState(false);
+  const sugRef = useRef<HTMLTextAreaElement>(null);
+  const compRef = useRef<HTMLTextAreaElement>(null);
+  const threadEnd = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setData(null); setLoadErr(null); setAiError(null); setSugErr(null); setCompErr(null);
+    messagesApi.get(id).then(d => { if (alive) { setData(d); setAiError(d.message.ai_error ?? null); } })
+      .catch(e => { if (alive) setLoadErr(e instanceof Error ? e.message : "Error del servidor."); });
+    return () => { alive = false; };
+  }, [id, reload]);
+
+  // Entrada desde el link de WhatsApp/Telegram: foco directo en la respuesta.
+  useEffect(() => {
+    if (!data) return;
+    threadEnd.current?.scrollIntoView({ block: "end" });
+    if (focusOnOpen) setTimeout(() => (sugRef.current ?? compRef.current)?.focus(), 60);
+  }, [data, focusOnOpen]);
+
+  if (loadErr) return <CsErrorState title="No pudimos abrir la conversación" message={loadErr} onRetry={() => setReload(n => n + 1)} />;
+  if (!data) return (
+    <div className="flex-1 flex flex-col gap-4 p-5 animate-pulse" aria-busy="true">
+      <div className="h-4 w-40 rounded bg-slate-200" /><div className="h-20 rounded-2xl bg-slate-100" />
+      <div className="h-12 w-2/3 rounded-2xl bg-slate-100" /><div className="h-12 w-1/2 self-end rounded-2xl bg-slate-100" />
+    </div>
+  );
+
+  const m = data.message;
+  const product = products.find(p => p.id === m.product_id);
+  const draft = data.replies.find(x => x.status === "draft") ?? null;
+  const failed = data.replies.find(x => x.status === "failed") ?? null;
+  const thread = data.replies.filter(x => x.status !== "draft");
+  const closed = m.reply_status === "closed";
+  const locked = closed || !!m.answered_externally;
+  const lockMsg = closed ? (m.closed_reason ?? "La conversación está cerrada en MercadoLibre.") + " Ya no se puede responder." : "Esta pregunta ya se respondió desde MercadoLibre. Para cambiar la respuesta, entrá a tu cuenta de MercadoLibre.";
+  const showSuggestion = !locked && m.reply_status !== "answered" && (draft || aiError || regenerating || (store.config.mode !== "off" && m.reply_status !== "needs_review"));
+
+  const renderSuggestion = () => (
+    <SuggestionBlock draft={draft} aiError={aiError} mode={store.config.mode} busy={sugBusy} regenerating={regenerating} sendError={sugErr}
+      onSend={t => send(t, "suggestion")} onDiscard={discard} onRetry={regenerate} textRef={sugRef} />
+  );
+  const apply = (d: MsgDetail) => { setData(d); onChanged({ ...toItem(d) }); };
+  const errMsg = (e: unknown) => e instanceof Error ? e.message : "Error inesperado.";
+
+  const regenerate = async () => {
+    setRegenerating(true); setAiError(null); setSugErr(null);
+    try { await messagesApi.aiSuggest(id); apply(await messagesApi.get(id)); }
+    catch (e) {
+      setAiError(errMsg(e));
+      if (e instanceof ApiError && e.code === "needs_human") { onChanged({ id, reply_status: "needs_review" }); setData(d => d && { ...d, message: { ...d.message, reply_status: "needs_review" } }); }
+    } finally { setRegenerating(false); }
+  };
+  const send = async (text: string, from: "suggestion" | "composer", clear?: () => void) => {
+    if (!text.trim()) return;
+    const setBusy = from === "suggestion" ? (v: "send" | null) => setSugBusy(v) : (v: "send" | null) => setCompBusy(v);
+    const setErr = from === "suggestion" ? setSugErr : setCompErr;
+    setBusy("send"); setErr(null);
+    try {
+      await messagesApi.reply(id, text);
+      apply(await messagesApi.get(id)); clear?.();
+      toast({ tone: "ok", message: "Respuesta enviada" });
+    } catch (e) {
+      setErr(errMsg(e));
+      if (e instanceof ApiError && e.code === "already_answered") setData(d => d && { ...d, message: { ...d.message, answered_externally: true } });
+    } finally { setBusy(null); }
+  };
+  const discard = async () => {
+    setSugBusy("discard");
+    try { await messagesApi.discardSuggestion(id); apply(await messagesApi.get(id)); setAiError(null); toast({ tone: "ok", message: "Sugerencia descartada" }); }
+    catch (e) { toast({ tone: "err", message: errMsg(e) }); }
+    finally { setSugBusy(null); }
+  };
+  const improve = async (text: string, set: (v: string) => void) => {
+    setCompBusy("improve");
+    try { const res = await messagesApi.improve(id, text); set(res.text); compRef.current?.focus(); }
+    catch (e) { toast({ tone: "err", message: `No se pudo mejorar el texto: ${errMsg(e)}` }); }
+    finally { setCompBusy(null); }
+  };
+  const assign = async () => {
+    setAssigning(true);
+    try {
+      const res = await messagesApi.assign(id);
+      setData(d => d && { ...d, message: { ...d.message, assigned_to: res.assigned_to } });
+      onChanged({ id, assigned_to: res.assigned_to });
+      toast({ tone: "ok", message: res.assigned_to ? "Conversación asignada a vos" : "Conversación liberada" });
+    } catch (e) { toast({ tone: "err", message: errMsg(e) }); }
+    finally { setAssigning(false); }
+  };
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0 min-w-0">
+      {/* Encabezado */}
+      <header className="flex items-center gap-3 px-3 md:px-5 py-3 bg-white flex-shrink-0" style={{ borderBottom: "1px solid #E2E8F0" }}>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-[15px] font-bold truncate" style={{ color: "#0A1628" }}>{m.buyer_name}</h2>
+            <ReplyStatusChip status={m.reply_status} />
+            {m.answered_externally && <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold" style={{ color: "#475569", background: "#F1F5F9" }}>Respondida desde MercadoLibre</span>}
+          </div>
+          <p className="text-[11px] truncate mt-0.5" style={{ color: "#94A3B8" }}>
+            {m.kind === "question" ? "Pregunta" : "Mensaje post-venta"} · {m.product_title} · <span className="font-mono">{m.listing_id}</span>
+          </p>
+        </div>
+        {!closed && (
+          <button onClick={assign} disabled={assigning}
+            className="flex-shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold"
+            style={m.assigned_to === ME ? { color: "#475569", border: "1px solid #E2E8F0", background: "white" } : { color: "#4F46E5", border: "1px solid #C7D2FE", background: "#EEF2FF" }}>
+            {assigning ? <SpinIcon /> : null}
+            {m.assigned_to === ME ? "Liberar" : "Asignarme"}
+          </button>
+        )}
+        <button onClick={onBack} aria-label="Cerrar conversación" className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center hover:bg-slate-100" style={{ color: "#94A3B8" }}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+        </button>
+      </header>
+
+      <div className="flex-1 overflow-y-auto min-h-0" style={{ background: "#F8FAFC" }}>
+        <div className="max-w-3xl mx-auto flex flex-col gap-4 px-3 md:px-6 py-4">
+          {/* Tarjeta de producto */}
+          <div className="flex items-center gap-3 rounded-2xl bg-white p-3" style={{ border: "1px solid #E2E8F0" }}>
+            {product?.images?.[0]
+              ? <img src={product.images[0]} alt="" className="w-14 h-14 rounded-xl object-cover flex-shrink-0" />
+              : <div className="flex-shrink-0"><ImgPlaceholder size={56} /></div>}
+            <div className="flex-1 min-w-0">
+              <p className="text-[13px] font-semibold truncate" style={{ color: "#0A1628" }}>{data.product.title}</p>
+            </div>
+            {product && (
+              <button onClick={() => onOpenProduct(product)} className="flex-shrink-0 text-xs font-semibold hover:underline" style={{ color: "#4F46E5" }}>Ver producto</button>
+            )}
+          </div>
+
+          {closed && <Notice tone="lock" title="Conversación cerrada por MercadoLibre">{m.closed_reason} Se muestra solo como registro y quedó fuera de las colas activas.</Notice>}
+          {m.reply_status === "needs_review" && m.review_reason && <Notice tone="warn" title="Para revisar · la IA no respondió">{m.review_reason} Te avisamos por WhatsApp/Telegram.</Notice>}
+
+          {/* Hilo */}
+          <div className="flex flex-col gap-3" aria-label="Hilo de mensajes">
+            {thread.map((rep, i) => <ThreadBubble key={i} rep={rep} />)}
+          </div>
+
+          {failed && !locked && (
+            <Notice tone="error" title="No se pudo enviar la respuesta"
+              action={<button onClick={() => send(failed.text, "composer")} disabled={compBusy === "send"} className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold text-white" style={{ background: "#DC2626" }}>{compBusy === "send" ? <SpinIcon size={11} /> : null}Reintentar</button>}>
+              MercadoLibre rechazó el envío por un error temporal. No se reintenta solo: tocá Reintentar cuando quieras volver a mandarla.
+            </Notice>
+          )}
+
+          {showSuggestion && renderSuggestion()}
+          <div ref={threadEnd} />
+        </div>
+      </div>
+
+      <Composer locked={locked} lockMsg={lockMsg} busy={compBusy} sendError={compErr} inputRef={compRef}
+        onSend={(t, clear) => send(t, "composer", clear)} onImprove={improve} />
+    </div>
+  );
+}
+
+function readOpenParam() {
+  try { return new URLSearchParams(window.location.search).get("open"); } catch { return null; }
+}
+function writeOpenParam(id: string | null) {
+  try {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("open", id); else url.searchParams.delete("open");
+    window.history.replaceState(null, "", url);
+  } catch { /* entorno sin history */ }
+}
+
+// Estado compartido de la bandeja (lista, filtros, selección, toast) para ambas propuestas.
+function useInbox() {
+  const store = useCsStore();
+  const deepLink = useRef(readOpenParam());
+  const [kind, setKindState] = useState<MsgKind>(() => deepLink.current?.startsWith("M-") ? "post_sale" : "question");
+  const [statuses, setStatuses] = useState<ReplyStatus[]>([]);
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState<MsgListItem[] | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
+  useEffect(() => { setPage(1); }, [kind, statuses, q, pageSize]);
+  const [listErr, setListErr] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(deepLink.current);
+  const [toast, setToast] = useState<{ tone: "ok" | "err"; message: string } | null>(null);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 3500); return () => clearTimeout(t); }, [toast]);
+
+  useEffect(() => {
+    let alive = true;
+    setItems(null); setListErr(null);
+    const t = setTimeout(() => {
+      messagesApi.list({ kind, reply_status: statuses, q, page, page_size: pageSize })
+        .then(res => { if (alive) { setItems(res.items); setTotal(res.total); } })
+        .catch(e => { if (alive) setListErr(e instanceof Error ? e.message : "Error del servidor."); });
+    }, q ? 250 : 0);
+    return () => { alive = false; clearTimeout(t); };
+  }, [kind, statuses, q, page, pageSize, reload, store.offline]);
+
+  const select = (id: string | null) => { setSelectedId(id); writeOpenParam(id); };
+  const setKind = (k: MsgKind) => { setKindState(k); select(null); };
+  const patchItem = (p: Partial<MsgListItem> & { id: string }) => setItems(list => list && list.map(it => it.id === p.id ? { ...it, ...p } : it));
+  const toggleStatus = (s: ReplyStatus) => setStatuses(cur => cur.includes(s) ? cur.filter(x => x !== s) : [...cur, s]);
+  const counts = STATUS_ORDER.reduce((acc, s) => ({ ...acc, [s]: MSG_DB.filter(d => d.message.kind === kind && d.message.reply_status === s).length }), {} as Record<ReplyStatus, number>);
+  const pendingTotal = (k: MsgKind) => MSG_DB.filter(d => d.message.kind === k && ["new", "ai_suggested", "needs_review"].includes(d.message.reply_status)).length;
+  const kindTotal = (k: MsgKind) => MSG_DB.filter(d => d.message.kind === k).length;
+  return { store, deepLinkId: deepLink.current, kind, setKind, statuses, setStatuses, toggleStatus, q, setQ, items, listErr, retry: () => setReload(n => n + 1), selectedId, select, patchItem, toast, setToast, counts, pendingTotal, kindTotal, page, setPage, pageSize, setPageSize, total };
+}
+type Inbox = ReturnType<typeof useInbox>;
+
+function InboxSearch({ ib, className = "" }: { ib: Inbox; className?: string }) {
+  return (
+    <div className={`relative ${className}`}>
+      <span className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#CBD5E1" }}>
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.4" /><path d="M9.5 9.5L12 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+      </span>
+      <input value={ib.q} onChange={e => ib.setQ(e.target.value)} placeholder="Buscar comprador o producto…" aria-label="Buscar conversaciones"
+        className="w-full pl-9 pr-3 py-2 rounded-xl text-sm outline-none" style={{ background: "#F8FAFC", border: "1.5px solid #E2E8F0", color: "#0A1628" }}
+        onFocus={e => { e.target.style.borderColor = "#4F46E5"; }} onBlur={e => { e.target.style.borderColor = "#E2E8F0"; }} />
+    </div>
+  );
+}
+
+function InboxEmpty({ ib }: { ib: Inbox }) {
+  const filtered = !!ib.q || ib.statuses.length > 0;
+  return (
+    <div className="flex flex-col items-center text-center gap-1.5 px-8 py-14">
+      <p className="text-sm font-semibold" style={{ color: "#0A1628" }}>{filtered ? "Sin resultados" : `Todavía no tenés ${ib.kind === "question" ? "preguntas" : "mensajes"}`}</p>
+      <p className="text-xs max-w-[260px]" style={{ color: "#64748B" }}>{filtered ? "No hay conversaciones con esos filtros." : "Cuando un comprador escriba, aparece acá."}</p>
+      {filtered && <button onClick={() => { ib.setQ(""); ib.setStatuses([]); }} className="text-xs font-semibold hover:underline mt-1" style={{ color: "#4F46E5" }}>Limpiar filtros</button>}
+    </div>
+  );
+}
+
+function InboxToast({ ib }: { ib: Inbox }) {
+  if (!ib.toast) return null;
+  return (
+    <div role="status" className="fixed left-1/2 -translate-x-1/2 md:left-auto md:translate-x-0 md:right-6 bottom-24 md:bottom-6 flex items-center gap-2.5 rounded-xl px-4 py-3 max-w-[calc(100vw-32px)]"
+      style={{ zIndex: 90, background: "#0A1628", color: "white", boxShadow: "0 12px 32px rgba(10,22,40,0.25)", animation: "fadeUp 0.18s ease both" }}>
+      <span style={{ color: ib.toast.tone === "ok" ? "#4ADE80" : "#F87171" }}>{ib.toast.tone === "ok" ? "✓" : "!"}</span>
+      <span className="text-[13px] font-medium">{ib.toast.message}</span>
+    </div>
+  );
+}
+
+// ══ Propuesta A — Bandeja en tabla + conversación en panel lateral ══
+// Toda la pantalla es la lista (densa, tipo Stripe). La conversación se abre en un
+// panel lateral sobre la tabla: nunca hay un panel vacío esperando selección.
+function PreguntasA({ ib, onOpenProduct, onNavigate }: { ib: Inbox; onOpenProduct: (p: Product) => void; onNavigate: (p: string) => void }) {
+  const cols = "minmax(150px,1.1fr) minmax(140px,1fr) minmax(200px,2.2fr) 130px 70px 112px 44px";
+  return (
+    <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
+      <header className="flex items-center gap-3 px-4 md:px-6 py-3 bg-white flex-shrink-0 flex-wrap" style={{ borderBottom: "1px solid #E2E8F0" }}>
+        <h1 className="text-base font-bold" style={{ color: "#0A1628" }}>Preguntas</h1>
+        <InboxSearch ib={ib} className="order-last md:order-none w-full md:w-auto md:flex-1 md:max-w-md md:ml-4" />
+        <div className="ml-auto flex items-center gap-3">
+          {ib.store.role === "owner" && <button onClick={() => onNavigate("Prompts AI")} className="text-xs font-semibold hover:underline" style={{ color: "#4F46E5" }}>Configurar IA</button>}
+        </div>
+      </header>
+
+      <div className="flex items-center gap-4 px-4 md:px-6 bg-white flex-shrink-0 overflow-x-auto" style={{ borderBottom: "1px solid #E2E8F0", scrollbarWidth: "none" }}>
+        {([["question", "Preguntas"], ["post_sale", "Mensajes"]] as [MsgKind, string][]).map(([k, label]) => (
+          <button key={k} role="tab" aria-selected={ib.kind === k} onClick={() => ib.setKind(k)}
+            className="flex-shrink-0 flex items-center gap-1.5 py-3 text-xs font-semibold transition-colors"
+            style={{ color: ib.kind === k ? "#0A1628" : "#94A3B8", borderBottom: `2px solid ${ib.kind === k ? "#4F46E5" : "transparent"}`, marginBottom: -1 }}>
+            {label}
+            <span className="tabular-nums px-1.5 rounded-full text-[10px]" style={{ background: ib.kind === k ? "#EEF2FF" : "#F1F5F9", color: ib.kind === k ? "#4F46E5" : "#94A3B8" }}>{ib.kindTotal(k)}</span>
+          </button>
+        ))}
+        <span className="w-px h-4 flex-shrink-0" style={{ background: "#E2E8F0" }} />
+        {STATUS_ORDER.map(s => {
+          const on = ib.statuses.includes(s); const meta = REPLY_STATUS[s];
+          return (
+            <button key={s} onClick={() => ib.toggleStatus(s)} aria-pressed={on}
+              className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors"
+              style={{ background: on ? meta.bg : "transparent", color: on ? meta.color : "#64748B", boxShadow: on ? `inset 0 0 0 1px ${meta.color}33` : "none" }}>
+              {meta.glyph && <span aria-hidden style={{ fontSize: 9 }}>{meta.glyph}</span>}{meta.label}
+              <span className="tabular-nums" style={{ color: on ? meta.color : "#CBD5E1" }}>{ib.counts[s]}</span>
+            </button>
+          );
+        })}
+        {ib.statuses.length > 0 && <button onClick={() => ib.setStatuses([])} className="flex-shrink-0 text-[11px] hover:underline" style={{ color: "#94A3B8" }}>Limpiar</button>}
+      </div>
+
+      <div className="flex-1 overflow-hidden flex flex-col min-h-0 p-3 md:p-5 gap-3">
+        <p className="text-xs px-1 flex-shrink-0" style={{ color: "#64748B" }}>
+          {ib.kind === "question"
+            ? <><b style={{ color: "#0A1628" }}>Preventa</b> · Consultas públicas que hacen los compradores en tus publicaciones antes de comprar.</>
+            : <><b style={{ color: "#0A1628" }}>Postventa</b> · Mensajes privados con compradores después de una venta: envíos, facturas, reclamos y devoluciones.</>}
+        </p>
+        <div className="flex-1 flex flex-col min-h-0 rounded-2xl bg-white overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
+         <div className="flex-1 overflow-auto bg-white min-h-0">
+          <div className="hidden md:grid z-10 items-center gap-4 px-4 py-2.5 sticky top-0 bg-white" style={{ gridTemplateColumns: cols, borderBottom: "1px solid #F1F5F9" }}>
+            {["Comprador", "Producto", "Último mensaje", "Estado", "Resp.", "Actividad", "ML"].map(h => (
+              <span key={h} style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.07em", color: "#94A3B8" }}>{h.toUpperCase()}</span>
+            ))}
+          </div>
+          {ib.listErr ? <CsErrorState title="No pudimos cargar las conversaciones" message={ib.listErr} onRetry={ib.retry} />
+            : !ib.items ? <ListSkeleton />
+            : ib.items.length === 0 ? <InboxEmpty ib={ib} />
+            : ib.items.map(m => {
+              const sel = m.id === ib.selectedId;
+              const unread = m.reply_status === "new" || m.reply_status === "needs_review";
+              return (
+                <div role="button" tabIndex={0} key={m.id} onClick={() => ib.select(m.id)} aria-current={sel}
+                  onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ib.select(m.id); } }}
+                  className="w-full text-left cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-indigo-300 grid md:items-center gap-x-4 gap-y-1 px-4 py-3 transition-colors grid-cols-[1fr_auto] md:[grid-template-columns:var(--cols)]"
+                  style={{ ["--cols" as string]: cols, background: sel ? "#EEF2FF" : "white", borderBottom: "1px solid #F8FAFC", boxShadow: sel ? "inset 3px 0 0 #4F46E5" : "none" }}
+                  onMouseEnter={e => { if (!sel) e.currentTarget.style.background = "#F8FAFC"; }}
+                  onMouseLeave={e => { if (!sel) e.currentTarget.style.background = "white"; }}>
+                  <span className="flex items-center gap-2 min-w-0">
+                    {unread && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: REPLY_STATUS[m.reply_status].color }} />}
+                    <span className={`text-[13px] truncate ${unread ? "font-bold" : "font-medium"}`} style={{ color: "#0A1628" }}>{m.buyer_name}</span>
+                    {m.assigned_to === ME && <span title="Asignada a mí" className="flex-shrink-0"><MineBadge /></span>}
+                  </span>
+                  <span className="md:hidden text-[11px] tabular-nums text-right whitespace-nowrap" style={{ color: "#94A3B8" }}>{fmtWhen(m.last_activity)}</span>
+                  <span className="text-xs truncate col-span-2 md:col-span-1" style={{ color: "#64748B" }}>{m.product_title}</span>
+                  <span className="text-xs truncate col-span-2 md:col-span-1" style={{ color: unread ? "#334155" : "#94A3B8" }}>{m.last_text}</span>
+                  <span className="flex items-center gap-1.5 col-span-2 md:col-span-1"><ReplyStatusChip status={m.reply_status} compact />
+                    <span className="md:hidden">{m.last_reply_mode && <ModeBadge mode={m.last_reply_mode} />}</span></span>
+                  <span className="hidden md:block">{m.last_reply_mode ? <ModeBadge mode={m.last_reply_mode} /> : <span style={{ color: "#CBD5E1" }}>—</span>}</span>
+                  <span className="hidden md:block text-xs tabular-nums whitespace-nowrap" style={{ color: unread ? "#4F46E5" : "#94A3B8", fontWeight: unread ? 600 : 400 }}>{fmtWhen(m.last_activity)}</span>
+                  <a href={mlConversationUrl(m)} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                    title="Abrir en MercadoLibre" aria-label={`Abrir conversación con ${m.buyer_name} en MercadoLibre`}
+                    className="hidden md:flex w-7 h-7 rounded-lg items-center justify-center transition-colors hover:bg-amber-50" style={{ color: "#94A3B8", border: "1px solid #E2E8F0" }}
+                    onMouseEnter={e => { e.currentTarget.style.color = "#B45309"; e.currentTarget.style.borderColor = "#FDE68A"; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = "#94A3B8"; e.currentTarget.style.borderColor = "#E2E8F0"; }}>
+                    <ExtLinkIcon />
+                  </a>
+                </div>
+              );
+            })}
+         </div>
+          <div className="flex items-center justify-between gap-3 px-4 md:px-6 py-3 flex-shrink-0 bg-white" style={{ borderTop: "1px solid #E2E8F0" }}>
+            <span className="text-xs" style={{ color: "#94A3B8" }}>{ib.total} {ib.total === 1 ? "conversación" : "conversaciones"}</span>
+            <div className="flex items-center gap-3">
+              <span className="hidden sm:inline text-xs" style={{ color: "#94A3B8" }}>Mostrar</span>
+              <select value={ib.pageSize} onChange={e => ib.setPageSize(Number(e.target.value))} className="hidden sm:block text-xs px-2 py-1 rounded-lg outline-none" style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", color: "#475569" }}>
+                <option>50</option><option>100</option><option>200</option>
+              </select>
+              <span className="text-xs font-medium tabular-nums" style={{ color: "#475569" }}>{ib.total ? (ib.page - 1) * ib.pageSize + 1 : 0} – {Math.min(ib.page * ib.pageSize, ib.total)}</span>
+              {(["‹", "›"] as const).map(g => {
+                const to = g === "‹" ? ib.page - 1 : ib.page + 1;
+                const dis = to < 1 || to > Math.max(1, Math.ceil(ib.total / ib.pageSize));
+                return <button key={g} disabled={dis} onClick={() => ib.setPage(to)} aria-label={g === "‹" ? "Página anterior" : "Página siguiente"}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors text-sm"
+                  style={{ color: "#94A3B8", border: "1px solid #E2E8F0", cursor: dis ? "default" : "pointer", opacity: dis ? 0.4 : 1 }}
+                  onMouseEnter={e => { if (!dis) e.currentTarget.style.background = "#F1F5F9"; }}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>{g}</button>;
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {ib.selectedId && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="hidden md:block flex-1 bg-black/30 backdrop-blur-[1px]" onClick={() => ib.select(null)} />
+          <div className="w-full md:w-[820px] md:max-w-[92vw] flex flex-col bg-white shadow-2xl" style={{ borderLeft: "1px solid #E2E8F0", animation: "fadeUp 0.2s ease both" }}>
+            <ConversationDetail key={ib.selectedId + String(ib.store.offline)} id={ib.selectedId} focusOnOpen={ib.selectedId === ib.deepLinkId}
+              onBack={() => ib.select(null)} onChanged={ib.patchItem} onOpenProduct={onOpenProduct} toast={ib.setToast} />
+          </div>
+        </div>
+      )}
+      <InboxToast ib={ib} />
+    </div>
+  );
+}
+
+function Preguntas({ onOpenProduct, onNavigate }: { onOpenProduct: (p: Product) => void; onNavigate: (page: string) => void }) {
+  const ib = useInbox();
+  return <PreguntasA ib={ib} onOpenProduct={onOpenProduct} onNavigate={onNavigate} />;
+}
+
+// ── Prompts AI · Atención al cliente (solo dueño) ──
+function CsAiSettings() {
+  const store = useCsStore();
+  const [save, setSave] = useState<SaveState>("idle");
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cfg = store.config;
+  const update = (patch: Partial<CsConfig>) => {
+    store.set({ config: { ...cfg, ...patch } });
+    setSave("saving");
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => { setSave("saved"); setTimeout(() => setSave(s => s === "saved" ? "idle" : s), 2000); }, 500);
+  };
+  const modes: { key: AiMode; label: string; desc: string }[] = [
+    { key: "off", label: "Off", desc: "La IA no interviene. Todas las conversaciones te llegan para responder a mano y te avisamos por WhatsApp/Telegram." },
+    { key: "suggest", label: "Sugerir", desc: "La IA prepara un borrador auditado y vos decidís si enviarlo." },
+    { key: "autopilot", label: "Piloto automático", desc: "La IA responde sola cuando supera el umbral de confianza. El resto queda Para revisar." },
+  ];
+  return (
+    <div className="rounded-xl bg-white p-4 flex flex-col gap-4" style={{ border: "1px solid #E2E8F0" }}>
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold" style={{ color: "#0A1628" }}>Modo de IA</span>
+        <SaveIndicator state={save} onRetry={() => update({})} />
+      </div>
+      <div role="radiogroup" className="grid grid-cols-3 p-1 rounded-xl" style={{ background: "#F1F5F9" }}>
+        {modes.map(mo => (
+          <button key={mo.key} role="radio" aria-checked={cfg.mode === mo.key} onClick={() => update({ mode: mo.key })}
+            className="py-2 rounded-lg text-xs font-semibold transition-all"
+            style={{ background: cfg.mode === mo.key ? "white" : "transparent", color: cfg.mode === mo.key ? "#0A1628" : "#64748B", boxShadow: cfg.mode === mo.key ? "0 1px 2px rgba(15,23,42,0.08)" : "none" }}>
+            {mo.label}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs -mt-2" style={{ color: "#64748B" }}>{modes.find(mo => mo.key === cfg.mode)!.desc}</p>
+
+      <div className="flex flex-col gap-2" style={{ opacity: cfg.mode === "off" ? 0.45 : 1 }}>
+        <div className="flex items-center justify-between">
+          <label htmlFor="cs-threshold" className="text-xs font-semibold" style={{ color: "#334155" }}>Confianza mínima</label>
+          <span className="text-xs font-bold tabular-nums" style={{ color: "#4F46E5" }}>{cfg.min_confidence}%</span>
+        </div>
+        <input id="cs-threshold" type="range" min={50} max={99} value={cfg.min_confidence} disabled={cfg.mode === "off"}
+          onChange={e => update({ min_confidence: Number(e.target.value) })} className="w-full accent-indigo-600" />
+        <span className="text-[11px]" style={{ color: "#94A3B8" }}>Por debajo de este valor la respuesta no se envía sola y queda Para revisar.</span>
+      </div>
+
+      <div className="flex items-center justify-between gap-4 pt-3" style={{ borderTop: "1px solid #F1F5F9", opacity: cfg.mode === "off" ? 0.45 : 1 }}>
+        <div>
+          <p className="text-xs font-semibold" style={{ color: "#334155" }}>Auditoría de respuestas</p>
+          <p className="text-[11px]" style={{ color: "#94A3B8" }}>Un segundo modelo revisa cada borrador antes de mostrarlo o enviarlo.</p>
+        </div>
+        <Toggle value={cfg.audit} onChange={v => cfg.mode !== "off" && update({ audit: v })} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Prompts AI ─────────────────────────────────────────────────────────────────
 // Plain-text editor over the `prompts` table. Each row is one key the backend reads.
 
@@ -6240,14 +7208,18 @@ const PROMPT_DEFS: PromptDef[] = [
     text: "A partir del nombre y la descripción del producto, indicá únicamente la marca. Si no podés determinarla con certeza, respondé \"Genérico\"." },
   { key: "ai_generate_model", group: "Generación de contenido", label: "Detectar modelo", desc: "Infiere el modelo cuando el campo está vacío.",
     text: "A partir del nombre y la descripción del producto, indicá únicamente el modelo o versión. Si no existe, generá un código de modelo corto basado en el nombre." },
-  { key: "ai_category", group: "Publicación", label: "Sugerir categoría", desc: "Elige la categoría del marketplace más adecuada.",
-    text: "Dada la información del producto, seleccioná la categoría de MercadoLibre más específica y correcta. Devolvé el id de categoría y su ruta completa." },
-  { key: "ai_auditor", group: "Publicación", label: "Auditor de publicación", desc: "Revisa la calidad de la publicación antes de publicar.",
-    text: "Actuá como auditor de calidad. Revisá título, descripción, fotos y atributos, y devolvé una lista de mejoras concretas priorizadas por impacto en las ventas." },
-  { key: "ai_improving_human_reply", group: "Atención al cliente", label: "Mejorar respuesta humana", desc: "Pulir la respuesta escrita por un operador antes de enviarla.",
+  { key: "cs_tone", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Tono base", desc: "Cómo suena la marca al responder preguntas y mensajes.",
+    text: "Respondé con tono cercano y profesional, en español rioplatense (voseo). Saludá por el nombre del comprador, andá al punto y cerrá con un saludo breve." },
+  { key: "cs_rules", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Reglas", desc: "Lo que la IA nunca debe hacer al responder compradores.",
+    text: "No compartas datos de contacto ni pidas datos personales fuera de la mensajería. No prometas plazos ni envíos gratis que no estén configurados. No respondas reclamos, devoluciones ni temas legales: derivalos a una persona." },
+  { key: "cs_classifier", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Clasificador", desc: "Decide si el mensaje lo puede responder la IA o requiere una persona.",
+    text: "Clasificá el mensaje en: consulta_producto, envio, facturacion, post_venta, reclamo, devolucion, datos_personales u otro. Devolvé la categoría y si requiere humano (true/false) con un motivo corto." },
+  { key: "cs_writer", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Redactor de respuestas", desc: "Escribe el borrador usando datos reales del producto y del catálogo.",
+    text: "Redactá una respuesta de máximo 350 caracteres usando solo datos del producto (precio, stock, atributos) y del catálogo del vendedor. Si citás otro producto, incluí nombre, precio y stock. Si te falta un dato, decí que lo consultás." },
+  { key: "cs_auditor", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Auditor de respuestas", desc: "Valida el borrador antes de mostrarlo o enviarlo.",
+    text: "Revisá el borrador contra las reglas y los datos del producto. Devolvé verdict (approved | corrected), score de 0 a 1 y la lista de objeciones. Si corregís, devolvé el texto corregido." },
+  { key: "ai_improving_human_reply", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Mejorar respuesta humana", desc: "Pulir la respuesta escrita por un operador antes de enviarla.",
     text: "Mejorá la redacción de la respuesta del vendedor manteniendo el sentido original. Corregí ortografía, hacela clara y amable, y conservá los datos concretos (precios, plazos, stock)." },
-  { key: "ai_inventory_search", group: "Búsqueda e inventario", label: "Búsqueda de inventario", desc: "Interpreta búsquedas en lenguaje natural sobre el inventario.",
-    text: "Convertí la consulta del usuario en filtros de inventario (marca, categoría, rango de precio, stock). Devolvé un JSON con los filtros detectados." },
   { key: "ai_general", group: "General", label: "Prompt general", desc: "Contexto base que se antepone a todas las tareas de IA.",
     text: "Sos el asistente de Omnipanel para un vendedor de e-commerce en Argentina. Respondé siempre en español rioplatense, de forma concisa y accionable. No inventes datos que no estén disponibles." },
   { key: "rules", group: "General", label: "Reglas", desc: "Restricciones y políticas que la IA debe respetar siempre.",
@@ -6310,12 +7282,16 @@ function PromptCard({ def, value, dirty, onChange, onSave, onReset }: {
   );
 }
 
+const CS_PROMPT_GROUP = "Atención al cliente · Mensajes de MercadoLibre";
+
 function PromptsAI() {
   // `saved` = persisted values, `draft` = in-progress edits.
   const [saved, setSaved] = useState<Record<string, string>>(() => Object.fromEntries(PROMPT_DEFS.map(d => [d.key, d.text])));
   const [draft, setDraft] = useState<Record<string, string>>(saved);
 
-  const groups = [...new Set(PROMPT_DEFS.map(d => d.group))];
+  const store = useCsStore();
+  const isOwner = store.role === "owner";
+  const groups = [...new Set(PROMPT_DEFS.map(d => d.group))].filter(g => isOwner || g !== CS_PROMPT_GROUP);
   const dirtyCount = PROMPT_DEFS.filter(d => draft[d.key] !== saved[d.key]).length;
 
   const saveOne = (k: string) => setSaved(s => ({ ...s, [k]: draft[k] }));
@@ -6341,9 +7317,16 @@ function PromptsAI() {
           )}
         </div>
 
+        {!isOwner && (
+          <div className="flex items-center gap-2 rounded-xl px-4 py-3 text-xs" style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", color: "#64748B" }}>
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.4" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" stroke="currentColor" strokeWidth="1.4" /></svg>
+            La configuración de IA para atención al cliente la ve solo el dueño del negocio.
+          </div>
+        )}
         {groups.map(group => (
           <div key={group} className="flex flex-col gap-2.5">
             <SectionLabel>{group}</SectionLabel>
+            {group === CS_PROMPT_GROUP && <CsAiSettings />}
             {PROMPT_DEFS.filter(d => d.group === group).map(def => (
               <PromptCard key={def.key} def={def} value={draft[def.key]} dirty={draft[def.key] !== saved[def.key]}
                 onChange={v => setDraft(d => ({ ...d, [def.key]: v }))}

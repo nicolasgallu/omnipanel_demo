@@ -345,11 +345,45 @@ CREATE TABLE IF NOT EXISTS mercadolibre.messages (
     to_user_id VARCHAR(20) NULL,
     status VARCHAR(50) NULL,
     data JSON NULL,
+    buyer_name VARCHAR(255) NULL,
+    last_text TEXT NULL,
+    reply_status VARCHAR(24) NULL,             -- unanswered | ai_suggested | answered | needs_human | closed
+    assigned_to INT NULL,
+    ai_confidence DECIMAL(3,2) NULL,
+    needs_human_reason VARCHAR(255) NULL,
+    last_outgoing_at TIMESTAMP NULL,
+    handled_at TIMESTAMP NULL,
+    last_notified_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,
     UNIQUE KEY uq_messages_account_kind_external (account_id, kind, external_id),
     INDEX idx_messages_account_created (account_id, created_at)
+);
+
+CREATE TABLE IF NOT EXISTS mercadolibre.replies (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    account_id INT NOT NULL,
+    message_id BIGINT NOT NULL,
+    author VARCHAR(16) NOT NULL,               -- 'ai' | 'user'
+    mode VARCHAR(16) NOT NULL,                 -- 'suggested' | 'autopilot' | 'manual'
+    text TEXT NOT NULL,
+    ai_confidence DECIMAL(3,2) NULL,
+    attempt_no TINYINT NOT NULL DEFAULT 1,
+    context_used JSON NULL,
+    used_inventory_search BOOLEAN NOT NULL DEFAULT FALSE,
+    audit_verdict VARCHAR(16) NULL,            -- pass | fix | fail
+    audit_score DECIMAL(3,2) NULL,
+    audit_issues JSON NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'draft',   -- draft | suggested | sending | sent | failed | discarded
+    external_reply_id VARCHAR(255) NULL,
+    error TEXT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,
+    FOREIGN KEY (message_id) REFERENCES mercadolibre.messages(id) ON DELETE CASCADE,
+    INDEX idx_replies_message (message_id),
+    INDEX idx_replies_account_status (account_id, status)
 );
 
 CREATE TABLE IF NOT EXISTS mercadolibre.price_suggestions (
@@ -535,12 +569,15 @@ CREATE TABLE IF NOT EXISTS ai.prompts (
     ai_generate_description TEXT NULL,
     ai_generate_brand TEXT NULL,
     ai_generate_model TEXT NULL,
-    ai_category TEXT NULL,
-    ai_auditor TEXT NULL,
-    ai_improving_human_reply TEXT NULL,
-    ai_inventory_search TEXT NULL,
-    ai_general TEXT NULL,
-    rules TEXT NULL,
+    ai_message_improve_human_reply TEXT NULL,
+    ai_message_general TEXT NULL,
+    ai_message_rules TEXT NULL,
+    ai_message_intent TEXT NULL,
+    ai_message_reply TEXT NULL,
+    ai_message_auditor TEXT NULL,
+    reply_mode VARCHAR(16) NOT NULL DEFAULT 'suggest',      -- off | suggest | autopilot
+    reply_min_confidence DECIMAL(3,2) NOT NULL DEFAULT 0.70,
+    reply_audit_enabled TINYINT(1) NOT NULL DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );

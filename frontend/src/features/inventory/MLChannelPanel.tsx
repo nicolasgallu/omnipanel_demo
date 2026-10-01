@@ -215,6 +215,11 @@ export function MLChannelPanel({
   const [pubMode, setPubMode] = useState<'traditional' | 'catalog'>(
     listing?.catalog_listing ? 'catalog' : 'traditional')
   const [catalogMatch, setCatalogMatch] = useState<CatalogProduct | null>(null)
+  // Catálogo obligatorio para la categoría/GTIN actual: la opción tradicional
+  // queda bloqueada en el paso Tipo. Se setea en el pre-flight de
+  // confirmCategory (búsqueda exacta por GTIN) y, reactivamente, cuando el
+  // matcher devuelve solo fichas catalog_required.
+  const [catalogMandatory, setCatalogMandatory] = useState(false)
 
   // Precio de la publicación (product_listings.price): editable en el paso
   // Configurar. Vacío = se usa el precio del inventario al guardar.
@@ -321,16 +326,47 @@ export function MLChannelPanel({
       // cargados en user_input_value: re-seedear el estado del wizard para
       // que esos valores aparezcan seleccionados en los campos.
       setMlCfg(mlCfgFromSettings(res))
+
+      // La ficha elegida era de la categoría anterior: se descarta.
+      setCatalogMatch(null)
+      // Pre-flight catálogo obligatorio: búsqueda EXACTA por GTIN (sin
+      // ambigüedad de nombres). Si todas las fichas son catalog_required,
+      // el paso Tipo arranca con tradicional bloqueada y catálogo
+      // preseleccionado, sin esperar a que el usuario pruebe suerte.
+      let mandatory = false
+      if (product.gtin) {
+        try {
+          const cat = await catalogApi.search(account.id, {
+            product_identifier: product.gtin,
+          })
+          const items = cat.items ?? []
+          mandatory =
+            items.length > 0 &&
+            items.every((c) => c.listing_strategy === 'catalog_required')
+        } catch {
+          // Best-effort: sin señal, se mantiene el flujo actual.
+          mandatory = false
+        }
+      }
+      setCatalogMandatory(mandatory)
+      if (mandatory) setPubMode('catalog')
       setStep(typeStep)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo configurar la categoría')
     } finally {
       setLoading(false)
     }
-  }, [categoryId, loading, account, product.id, typeStep])
+  }, [categoryId, loading, account, product.id, product.gtin, typeStep])
 
   const submit = useCallback(async () => {
     if (loading || account === null || account === undefined) return
+    // Guard explícito en TODOS los pasos: modo catálogo sin ficha elegida
+    // (y sin item ya vinculado) no puede publicar — evita el downgrade
+    // silencioso a tradicional que ocurría cuando el estado se perdía.
+    if (pubMode === 'catalog' && !catalogMatch && !(edited && listing?.catalog_listing)) {
+      setError('Elegí una ficha de catálogo para publicar en modo catálogo.')
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -358,6 +394,15 @@ export function MLChannelPanel({
       const result = edited && hasMeliItem
         ? await channelsApi.mlAction('update', product.id, account.id, config)
         : await channelsApi.mlPublish(product.id, account.id, config)
+      // Breadcrumb de debug: qué modo y ficha se mandaron (visible en la
+      // consola del navegador; el backend también loguea su propio payload).
+      console.debug('[omnipanel] mlPublish', {
+        productId: product.id,
+        mode: catalogActive ? 'catalog' : 'traditional',
+        catalogProductId: catalogMatch?.id ?? null,
+        edited,
+        config,
+      })
       // 'prepublished' también es éxito: el item existe y Meli lo está
       // activando. Mostramos la vista de publicado con nota de proceso.
       // 'paused' con item creado también es éxito de la publicación: Meli
@@ -518,6 +563,10 @@ export function MLChannelPanel({
       onChanged,
       onReload,
     )
+    // Reset completo del wizard: la ficha y el modo de la publicación vieja
+    // no deben sobrevivir al borrado (causaban publicaciones fantasma).
+    setPubMode('traditional')
+    setCatalogMatch(null)
     setPrepublishedView(false)
   }
 
@@ -602,9 +651,26 @@ export function MLChannelPanel({
           setMode={setPubMode}
           match={catalogMatch}
           setMatch={setCatalogMatch}
+          mandatory={catalogMandatory}
+          setMandatory={setCatalogMandatory}
           accountId={account.id}
           initialQuery={product.gtin || product.name}
         />
+      )}
+
+      {isActive && step === configStep && (
+        <div className="flex items-center gap-2 mb-3">
+          <span
+            className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold"
+            style={catalogActive
+              ? { color: '#4F46E5', background: '#EEF2FF' }
+              : { color: '#475569', background: '#F1F5F9' }}
+          >
+            {catalogActive
+              ? `Modo: Catálogo${catalogMatch ? ` · ${catalogMatch.name}` : ''}`
+              : 'Modo: Tradicional'}
+          </span>
+        </div>
       )}
 
       {isActive && step === configStep && (catalogActive ? (
