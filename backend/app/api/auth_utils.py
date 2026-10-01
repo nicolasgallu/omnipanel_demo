@@ -16,10 +16,17 @@ from functools import wraps
 from flask import g, jsonify, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from app import cache
 from app.db.helpers import get_one
 from app.settings.config import SCHEMA_ACCOUNTS, SECRET_KEY
 
 TOKEN_MAX_AGE = 7 * 24 * 3600  # 7 days
+
+# Cache del chequeo "negocio/usuario activo" (por request): corto a propósito
+# y con invalidación explícita en platform_admin (activar/desactivar business)
+# y en admin (PATCH de empleado). La desactivación estricta sigue siendo
+# efectiva al instante porque esas rutas bulean la versión del negocio.
+TTL_AUTH_ACTIVE = 60
 
 BUSINESSES_TABLE = SCHEMA_ACCOUNTS + ".businesses"
 EMPLOYEES_TABLE = SCHEMA_ACCOUNTS + ".employees"
@@ -52,7 +59,19 @@ def read_token(token):
 
 def _token_user_active(user):
     """Desactivación estricta: un token de business/employee muere al instante
-    si el business (o el employee) quedó inactivo en la DB."""
+    si el business (o el employee) quedó inactivo en la DB.
+
+    Cacheado por (business_id, role, user id) con la versión del negocio en
+    la clave: la ruta de activar/desactivar del panel de plataforma y el
+    PATCH de empleados invalidan la entrada al escribir.
+    """
+    return cache.get_or_compute(
+        user.get("business_id"), "token_user_active", TTL_AUTH_ACTIVE,
+        lambda: _token_user_active_db(user),
+        user.get("role"), user.get("id"))
+
+
+def _token_user_active_db(user):
     try:
         if user.get("role") == "employee":
             row = get_one(

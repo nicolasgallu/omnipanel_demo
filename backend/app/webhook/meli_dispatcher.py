@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 
+from app import tasks
 from app.db.claims import store_notification
 from app.integrations.core.credentials import (
     get_account_owner,
@@ -17,10 +18,15 @@ meli = Blueprint("wh_meli", __name__, url_prefix="/webhooks/meli")
 def main():
     """Single Meli callback: inbox + route the notification by its topic.
 
-    Every topic lands first in platform_accounts.events (raw, deduped by _id),
-    then a topic handler (registry) may fetch the resource and upsert a flat
-    projection. Handlers never fail the request: the inbox row is the safety
-    net and Meli only needs a fast 200.
+    Every topic lands first in platform_accounts.events (raw, deduped by _id)
+    — el respaldo durable, SIEMPRE antes de responder 200. Después:
+
+    - orders_v2: inline (máquina de estados propia con claim; el retry lo
+      maneja Meli con el 500 del claim re-armado).
+    - items: inline (sync barato de estado, 1 GET + 1 UPDATE).
+    - resto de topics del registry: el handler pesado (fetch a Meli + upsert)
+      se encola en Cloud Tasks para acusar 200 rápido; si el enqueue falla,
+      fallback inline para no perder el evento.
     """
     set_event_id(None)
     data = request.get_json(force=True)
@@ -40,13 +46,20 @@ def main():
         return process_item_notification(data, account)
 
     handler = _lookup_handler(topic)
-    if handler:
-        try:
-            handler(account, data)
-        except Exception:
-            # Always ack 200; the inbox row is already safe.
-            logger.exception("Notification handler failed for topic %s", topic)
+    if handler is None:
+        return jsonify({"status": "done"}), 200
 
+    if tasks.enqueue(account["id"], topic, data):
+        return jsonify({"status": "done"}), 200
+
+    # Cloud Tasks caído: correr el handler inline (best-effort, el inbox ya
+    # está seguro). Los handlers nunca fallan el request: 200 siempre.
+    logger.warning("Cloud Tasks unavailable; running handler inline for topic %s",
+                   topic)
+    try:
+        handler(account, data)
+    except Exception:
+        logger.exception("Notification handler failed for topic %s", topic)
     return jsonify({"status": "done"}), 200
 
 

@@ -5,6 +5,7 @@ import hmac
 from flask import Blueprint, request, jsonify
 from google.cloud import storage
 
+from app import cache
 from app.db.claims import claim, fail, finish, resolve_actor
 from app.utils.logger import logger, set_event_id
 from app.db.helpers import get_one, execute
@@ -87,6 +88,9 @@ def main():
         return jsonify({"status": "failed"}), 500
 
     finish(event_id)
+    # La imagen tocó inventory.product_images: invalidar la cache del negocio
+    # DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(account.get("business_id"))
     return jsonify({"status": "done", **result}), 200
 
 

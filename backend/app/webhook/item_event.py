@@ -1,6 +1,7 @@
 import requests
 from flask import Blueprint, request, jsonify
 
+from app import cache
 from app.db.helpers import execute, get_one
 from app.integrations.core.credentials import (
     get_access_token,
@@ -142,6 +143,7 @@ def _update_listing_status(account, meli_id, item):
             + " WHERE account_id = :account_id AND marketplace_item_id = :meli_id"
             + " AND (marketplace_status IS NULL OR marketplace_status != :status)",
             {"status": status, "account_id": account["id"], "meli_id": meli_id})
+        cache.invalidate_business(account.get("business_id"))  # post-escritura
         logger.info("Shadow listing %s status synced to %s", meli_id, status)
         return
 
@@ -208,6 +210,10 @@ def _update_listing_status(account, meli_id, item):
              "account_id": account["id"], "meli_id": meli_id})
         logger.info("OPTOUT by Meli (situación 1): %s closed; back to %s",
                     meli_id, row["marketplace_item_id"])
+
+    # Cualquier sync de items tocó listados: invalidar la cache del negocio
+    # DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(account.get("business_id"))
 
 
 def _item_id_from_resource(resource):

@@ -45,6 +45,30 @@ def insert_and_get_id(sql, params=None):
         return result.lastrowid
 
 
+def stream_rows(sql, params=None, batch=1000):
+    """Yield lists of row dicts from ONE server-side streaming query.
+
+    MySQL cursor sin buffer (stream_results): la memoria queda acotada al
+    tamaño del batch aunque el resultado tenga cientos de miles de filas —
+    el export CSV no depende del volumen de datos. La conexión permanece
+    tomada durante TODO el iterado (siempre cerrarla en finally; el generador
+    ya lo hace) y no se puede usar para otra query a la vez.
+    """
+    conn = engine.connect()
+    try:
+        with conn.begin():
+            result = conn.execution_options(stream_results=True).execute(
+                text(sql), params or {})
+            mappings = result.mappings()  # filas como mappings (fetchmany del cursor crudo no trae keymap)
+            while True:
+                rows = mappings.fetchmany(batch)
+                if not rows:
+                    break
+                yield [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def run_parallel(query_map):
     """Run several SELECTs concurrently (one pooled connection each).
 

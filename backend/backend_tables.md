@@ -204,9 +204,19 @@ CREATE TABLE inventory.products (
     UNIQUE KEY uq_business_internal_code (business_id, internal_code),
     UNIQUE KEY uq_business_sku (business_id, sku),
     UNIQUE KEY uq_business_gtin (business_id, gtin),
-    INDEX  idx_business_id (business_id)
+    INDEX  idx_business_id (business_id),
+    -- Listados del dashboard ordenan por (business_id, updated_at DESC, id DESC):
+    -- este índice evita el filesort en list_products / export / ml_listings.
+    INDEX idx_business_updated (business_id, updated_at DESC, id DESC)
 );
 ```
+
+> Índice agregado (29/09) para los listados ordenados por `updated_at`:
+> ya está en `seed_data.sql`; en **Cloud SQL** correr una vez:
+>
+> ```sql
+> ALTER TABLE inventory.products ADD INDEX idx_business_updated (business_id, updated_at DESC, id DESC);
+> ```
 
 ```sql
 CREATE TABLE inventory.product_images (

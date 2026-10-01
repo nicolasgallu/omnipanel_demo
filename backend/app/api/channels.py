@@ -26,17 +26,19 @@ import requests
 from flask import Blueprint, jsonify, make_response, request
 from sqlalchemy import text
 
+from app import cache
 from app.api.auth_utils import current_business_id, current_user, require_auth
 from app.api.inventory import (
     _STATUS_LABELS,
     _serializable,
     csv_response,
     ml_status_from_db,
+    stream_csv_response,
     tn_status_from_db,
 )
 from app.db.claims import claim, finish, fail
 from app.db.engine import engine
-from app.db.helpers import execute, get_all, get_one, insert_and_get_id
+from app.db.helpers import execute, get_all, get_one, insert_and_get_id, stream_rows
 from app.integrations.core.credentials import get_access_token
 from app.integrations.mercadolibre.product_handler import _meli_request, _settings_builder
 from app.integrations.tiendanube.product_handler import create_categories
@@ -53,6 +55,10 @@ ML_LISTINGS_TABLE = "mercadolibre.product_listings"
 ML_ATTRIBUTES_TABLE = "mercadolibre.attributes"
 TN_LISTINGS_TABLE = "tiendanube.product_listings"
 TN_ATTRIBUTES_TABLE = "tiendanube.attributes"
+
+# Resumen de publicaciones ML: TTL corto — la vista se refresca seguido y
+# publish/pause/delete/price (y los webhooks de items) lo invalidan.
+TTL_ML_SUMMARY = 15
 
 TN_DEFAULT_SETTINGS = {
     "SEO_TITLE": {"DEFAULT_VALUE": None, "USER_INPUT_VALUE": None},
@@ -502,6 +508,10 @@ def _ml_action(event_type, data):
                     time.monotonic() - start)
         return jsonify({"error": "meli_error", "message": str(exc)}), 502
 
+    # La pipeline toca listados (incluso en caminos de error parcial):
+    # invalidar SIEMPRE y DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(current_business_id())
+
     # Tras publicar/actualizar/pausar, sincronizar el estado REAL del item una
     # vez (misma lógica que el webhook de items): Meli responde el estado al
     # instante, así el front no depende de que llegue el webhook para saber
@@ -685,6 +695,7 @@ def ml_price():
         + " SET price = :p, price_manually_changed = 1, price_updated_at = NOW()"
         + " WHERE id = :lid",
         {"p": price_int, "lid": listing["id"]})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     logger.info("ML listing price set locally for product %s: %s",
                 product_id, price_int)
     return jsonify({"status": "ok", "price": price_int,
@@ -714,6 +725,7 @@ def tn_price():
         + " SET price = :p, price_manually_changed = 1, price_updated_at = NOW()"
         + " WHERE id = :lid",
         {"p": price_int, "lid": listing["id"]})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     logger.info("TN listing price set locally for product %s: %s",
                 product_id, price_int)
     return jsonify({"status": "ok", "price": price_int,
@@ -992,6 +1004,7 @@ def ml_catalog_optin():
         + " WHERE id = :lid",
         {"new_id": str(new_meli_id), "cpid": catalog_product_id,
          "old_id": str(meli_id), "st": shadow_status, "lid": listing["id"]})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
 
     # Sincronizar el estado REAL del nuevo item de catálogo al instante:
     # Meli suele arrancarlo PAUSADO mientras lo procesa/moda, y el front debe
@@ -1095,6 +1108,7 @@ def ml_catalog_optout():
         + " marketplace_item_id = NULL, marketplace_status = NULL"
         + " WHERE id = :lid",
         {"old_id": str(shadow), "lid": listing["id"]})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
 
     # 4) Sincronizar el estado real de la publicación tradicional.
     try:
@@ -1434,6 +1448,10 @@ def tn_publish():
                     time.monotonic() - start)
         return jsonify({"error": "tiendanube_error", "message": str(exc)}), 502
 
+    # La pipeline toca listados/producto incluso en caminos de error parcial:
+    # invalidar SIEMPRE y DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(current_business_id())
+
     listing = get_one(
         "SELECT tnube_id, status, reason, remedy, permalink FROM "
         + TN_LISTINGS_TABLE + " WHERE product_id = :p",
@@ -1484,6 +1502,10 @@ def _tn_action(event_type, data):
                     " duration=%.2fs", event_type, product_id,
                     time.monotonic() - start)
         return jsonify({"error": "tiendanube_error", "message": str(exc)}), 502
+
+    # La pipeline toca listados/producto incluso en caminos de error parcial:
+    # invalidar SIEMPRE y DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(current_business_id())
 
     try:
         listing = get_one(
@@ -1634,18 +1656,34 @@ def ml_listings():
         + " sc.total_selling_cost_with_tax AS selling_cost,"
         + " sc.total_selling_cost, sc.percentage_fee, sc.ship_list_cost,"
         + " ps.suggested_price, ps.current_price AS suggested_current_price,"
-        + " ps.status AS suggested_status"
+        + " ps.status AS suggested_status,"
+        + " COUNT(*) OVER() AS total"
         + joins + filters + perf_filter
         + " ORDER BY p.updated_at DESC, p.id DESC LIMIT :limit OFFSET :offset",
         params)
 
-    summary = get_one(
-        "SELECT COUNT(*) AS listed,"
-        " SUM(CASE WHEN ml.status IN ('active','Active','Updated.') THEN 1 ELSE 0 END) AS published,"
-        " SUM(CASE WHEN ml.status IN ('paused','Paused.') THEN 1 ELSE 0 END) AS paused,"
-        " AVG(perf.score) AS avg_perf"
-        + joins + " WHERE p.business_id = :b AND (" + ML_LISTED_STATUS_SQL + ")",
-        {"b": current_business_id()})
+    # Resumen (listed/published/paused/avg_perf): otro scope (TODO el negocio,
+    # sin filtros) -> cache corta invalidada por versión del business
+    # (publish/pause/delete/price + webhooks de items).
+    def _compute_summary():
+        row = get_one(
+            "SELECT COUNT(*) AS listed,"
+            " SUM(CASE WHEN ml.status IN ('active','Active','Updated.') THEN 1 ELSE 0 END) AS published,"
+            " SUM(CASE WHEN ml.status IN ('paused','Paused.') THEN 1 ELSE 0 END) AS paused,"
+            " AVG(perf.score) AS avg_perf"
+            + joins + " WHERE p.business_id = :b AND (" + ML_LISTED_STATUS_SQL + ")",
+            {"b": current_business_id()})
+        avg = row.get("avg_perf")
+        return {
+            "listed": int(row["listed"] or 0),
+            "published": int(row["published"] or 0),
+            "paused": int(row["paused"] or 0),
+            "avg_perf": round(float(avg), 1) if avg is not None else None,
+        }
+
+    summary = cache.get_or_compute(
+        current_business_id(), "ml_listings_summary", TTL_ML_SUMMARY,
+        _compute_summary)
 
     items = []
     for row in rows:
@@ -1687,19 +1725,13 @@ def ml_listings():
             "suggested_status": row.get("suggested_status"),
         })
 
-    total = int(get_one(
-        "SELECT COUNT(*) AS total" + joins + filters + perf_filter,
-        base_params)["total"] or 0)
+    # El total viaja en la MISMA query con COUNT(*) OVER() (una sola ida a la
+    # DB, mismo patrón que list_products). Página fuera de rango -> 0.
+    total = int(rows[0]["total"] or 0) if rows else 0
 
-    avg = summary.get("avg_perf")
     return jsonify({
         "items": items,
-        "summary": {
-            "listed": int(summary["listed"] or 0),
-            "published": int(summary["published"] or 0),
-            "paused": int(summary["paused"] or 0),
-            "avg_perf": round(float(avg), 1) if avg is not None else None,
-        },
+        "summary": summary,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -1806,39 +1838,44 @@ def ml_listings_export():
         sql += " LIMIT :limit"
         params["limit"] = limit
 
-    rows = get_all(sql, params)
-    out = []
-    for r in rows:
-        out.append({
-            "prod": r.get("name_edited") or r.get("name") or "",
-            "pub": r.get("external_id") or "",
-            "price": r.get("listing_price") if r.get("listing_price") is not None
-                     else (r.get("price") or 0),
-            "tipo": "Catálogo" if r.get("catalog_product_id") else "Tradicional",
-            "status": _STATUS_LABELS.get(
-                ml_status_from_db(r.get("db_status"), r.get("reason")),
-                ml_status_from_db(r.get("db_status"), r.get("reason"))),
-            "perf": r.get("perf_score") if r.get("perf_score") is not None else "",
-            "cost": r.get("selling_cost") if r.get("selling_cost") is not None else "",
-            "category": r.get("category") or "",
-            "stock": r.get("stock") or 0,
-            "upd": r.get("listing_updated_at") or r.get("updated_at") or "",
-            "brand": r.get("brand") or "",
-            "model": r.get("model") or "",
-            "manual_price": "Manual" if r.get("price_manually_changed") else "Auto",
-            "reason": r.get("reason") or "",
-            "fee": (str(r["percentage_fee"]) + " %")
-                   if r.get("percentage_fee") is not None else "",
-            "cost_no_tax": r.get("total_selling_cost")
-                           if r.get("total_selling_cost") is not None else "",
-            "ship_cost": r.get("ship_list_cost")
-                         if r.get("ship_list_cost") is not None else "",
-            "suggested": r.get("suggested_price")
-                         if r.get("suggested_price") is not None else "",
-        })
+    # UNA sola query con cursor server-side: filas en batches de 1000 que se
+    # escriben al CSV a medida que llegan (memoria acotada, sin paginar con
+    # LIMIT/OFFSET). El `limit` sigue vivo como LIMIT dentro de la query.
+    def _batches():
+        for batch in stream_rows(sql, params):
+            out = []
+            for r in batch:
+                out.append({
+                    "prod": r.get("name_edited") or r.get("name") or "",
+                    "pub": r.get("external_id") or "",
+                    "price": r.get("listing_price") if r.get("listing_price") is not None
+                             else (r.get("price") or 0),
+                    "tipo": "Catálogo" if r.get("catalog_product_id") else "Tradicional",
+                    "status": _STATUS_LABELS.get(
+                        ml_status_from_db(r.get("db_status"), r.get("reason")),
+                        ml_status_from_db(r.get("db_status"), r.get("reason"))),
+                    "perf": r.get("perf_score") if r.get("perf_score") is not None else "",
+                    "cost": r.get("selling_cost") if r.get("selling_cost") is not None else "",
+                    "category": r.get("category") or "",
+                    "stock": r.get("stock") or 0,
+                    "upd": r.get("listing_updated_at") or r.get("updated_at") or "",
+                    "brand": r.get("brand") or "",
+                    "model": r.get("model") or "",
+                    "manual_price": "Manual" if r.get("price_manually_changed") else "Auto",
+                    "reason": r.get("reason") or "",
+                    "fee": (str(r["percentage_fee"]) + " %")
+                           if r.get("percentage_fee") is not None else "",
+                    "cost_no_tax": r.get("total_selling_cost")
+                                   if r.get("total_selling_cost") is not None else "",
+                    "ship_cost": r.get("ship_list_cost")
+                                 if r.get("ship_list_cost") is not None else "",
+                    "suggested": r.get("suggested_price")
+                                 if r.get("suggested_price") is not None else "",
+                })
+            yield out
 
     stamp = datetime.now().strftime("%Y%m%d")
-    return csv_response(columns, out, "publicaciones-ml-%s.csv" % stamp)
+    return stream_csv_response(columns, _batches(), "publicaciones-ml-%s.csv" % stamp)
 
 
 @channels_bp.route("/tiendanube/listings", methods=["GET"])
@@ -2353,6 +2390,7 @@ def ml_pictures():
                 return jsonify({"error": "no_new_pictures",
                                 "message": "No hay fotos nuevas para descargar"}), 400
             logger.info("Saved %d ML pictures for product %s", len(saved), product_id)
+            cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
             return jsonify({"saved": len(saved), "failed": failed, "images": saved}), 201
         finally:
             conn.execute(text("SELECT RELEASE_LOCK(:name)"), {"name": lock_name})

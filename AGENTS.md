@@ -21,7 +21,8 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
 - Webhooks (HMAC, no tocar su contrato):
   - `backend/app/api/publish_event.py` → `/webhooks/publications` (prepublish/publish/update/pause/delete para ML y TN, firmado con `webhook_secret` del business). **DEPRECADO en prueba (28/09)** — ver Pendientes.
   - `backend/app/api/images_event.py` → `/webhooks/images` (PNG base64 → GCS → DB). **DEPRECADO en prueba (28/09)** — ver Pendientes.
-  - `backend/app/webhook/meli_dispatcher.py` → `/webhooks/meli` (una URL para todos los topics de Meli: inbox en `events` + ruteo por `topic` vía `registry.py`).
+  - `backend/app/webhook/meli_dispatcher.py` → `/webhooks/meli` (una URL para todos los topics de Meli: inbox en `events` + ruteo por `topic` vía `registry.py`). El inbox SIEMPRE queda inline (antes del 200); los handlers pesados del registry se encolan vía `backend/app/tasks.py` (Cloud Tasks en prod, stub en memoria en dev/tests). `orders_v2` y `items` siguen inline.
+  - `backend/app/webhook/task_worker.py` → `/internal/tasks/webhook` (worker de Cloud Tasks: OIDC en prod, corre el handler del topic; 200 ok / 500 reintento). Guía de setup: `backend/docs/cloud_tasks_setup.md`.
   - `backend/app/webhook/registry.py` → `{platform: {topic: handler}}` (nuevo platform = nuevo módulo + una entrada).
   - `backend/app/webhook/topics/` → handlers fetch+upsert (messages, price_suggestions, shipments, promotions, claims, payments, invoices) hacia tablas planas `mercadolibre.*`.
   - `backend/app/webhook/item_event.py` → sync de status de items (topic `items`).

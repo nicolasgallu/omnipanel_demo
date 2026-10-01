@@ -23,6 +23,7 @@ from app.utils.logger import set_event_id
 from app.webhook.item_event import item_status
 from app.webhook.meli_dispatcher import meli
 from app.webhook.selling_event import sells
+from app.webhook.task_worker import task_worker
 
 
 def create_app():
@@ -35,6 +36,8 @@ def create_app():
     app.register_blueprint(sells)
     app.register_blueprint(item_status)
     app.register_blueprint(meli)
+    # Worker interno de Cloud Tasks (handlers pesados de topics Meli).
+    app.register_blueprint(task_worker)
 
     # REST API for the frontend (new)
     app.register_blueprint(auth_bp)

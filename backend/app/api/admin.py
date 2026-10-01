@@ -4,6 +4,7 @@ import json
 
 from flask import Blueprint, g, jsonify, request
 
+from app import cache
 from app.api.auth_utils import current_business_id, current_user, require_auth, require_business
 from app.api.inventory import _owned_product, _serializable
 from app.db.helpers import execute, get_all, get_one
@@ -19,6 +20,11 @@ PROMPTS_TABLE = SCHEMA_AI + ".prompts"
 GCS_BUCKET = "pictures_ecommerce_guiaslocales"
 MAX_LOGO_BYTES = 2 * 1024 * 1024  # 2 MB
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+# TTLs de la cache en memoria (ver app/cache.py). Settings/prompts cambian
+# poco; el TTL es la red de seguridad y las rutas que escriben invalidan.
+TTL_SETTINGS = 60
+TTL_PROMPTS = 60
 
 
 # ─── Empleados ────────────────────────────────────────────────────────────────
@@ -91,6 +97,7 @@ def patch_employee(employee_id):
         {"active": active, "id": employee_id, "b": current_business_id()})
     if not rowcount:
         return jsonify({"error": "not_found", "message": "Usuario no encontrado"}), 404
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     return jsonify({"id": employee_id, "active": bool(active)})
 
 
@@ -166,21 +173,28 @@ def _validate_prompt_settings(settings):
     return out
 
 
+def _prompts_payload(business_id):
+    """Payload JSON de /api/ai/prompts (cacheable, sin request context)."""
+    try:
+        row = get_one("SELECT * FROM " + PROMPTS_TABLE
+                      + " WHERE business_id = :b", {"b": business_id})
+    except LookupError:
+        return {"prompts": {}, "settings": _prompt_settings(None),
+                "supported": PROMPT_KEYS, "message":
+                "Sin prompts guardados para tu negocio"}
+    prompts = {k: row.get(PROMPT_ALIASES.get(k, k)) for k in PROMPT_KEYS}
+    return {"prompts": prompts, "settings": _prompt_settings(row),
+            "supported": PROMPT_KEYS}
+
+
 @admin_bp.route("/ai/prompts", methods=["GET"])
 @require_auth
 def get_prompts():
     """Prompts del negocio (una fila por business en ai.prompts)."""
-    try:
-        row = get_one("SELECT * FROM " + PROMPTS_TABLE
-                      + " WHERE business_id = :b",
-                      {"b": current_business_id()})
-    except LookupError:
-        return jsonify({"prompts": {}, "settings": _prompt_settings(None),
-                        "supported": PROMPT_KEYS, "message":
-                        "Sin prompts guardados para tu negocio"}), 200
-    prompts = {k: row.get(PROMPT_ALIASES.get(k, k)) for k in PROMPT_KEYS}
-    return jsonify({"prompts": prompts, "settings": _prompt_settings(row),
-                    "supported": PROMPT_KEYS})
+    business_id = current_business_id()
+    return jsonify(cache.get_or_compute(
+        business_id, "ai_prompts", TTL_PROMPTS,
+        lambda: _prompts_payload(business_id)))
 
 
 @admin_bp.route("/ai/prompts", methods=["PUT"])
@@ -221,6 +235,7 @@ def put_prompts():
         params = dict(updates, id=row["id"])
         execute("UPDATE " + PROMPTS_TABLE + " SET " + fields
                 + " WHERE id = :id", params)
+    cache.invalidate_business(business_id)  # post-escritura (ver cache.py)
 
     saved = get_one("SELECT * FROM " + PROMPTS_TABLE + " WHERE id = :id",
                     {"id": row["id"]})
@@ -242,16 +257,30 @@ def _business_config():
     return row, config
 
 
+def _settings_payload(business_id):
+    """Payload JSON de /api/settings (cacheable, sin request context)."""
+    row = get_one("SELECT config, email, full_name FROM " + BUSINESSES_TABLE
+                  + " WHERE id = :b", {"b": business_id})
+    raw = row.get("config")
+    try:
+        config = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        config = {}
+    return {
+        "email": row.get("email"),
+        "full_name": row.get("full_name"),
+        "logo_url": config.get("logo_url"),
+    }
+
+
 @admin_bp.route("/settings", methods=["GET"])
 @require_auth
 @require_business
 def get_settings():
-    row, config = _business_config()
-    return jsonify({
-        "email": row.get("email"),
-        "full_name": row.get("full_name"),
-        "logo_url": config.get("logo_url"),
-    })
+    business_id = current_business_id()
+    return jsonify(cache.get_or_compute(
+        business_id, "settings", TTL_SETTINGS,
+        lambda: _settings_payload(business_id)))
 
 
 @admin_bp.route("/settings/logo", methods=["POST"])
@@ -280,6 +309,7 @@ def upload_logo():
     execute("UPDATE " + BUSINESSES_TABLE + " SET config = :config WHERE id = :b",
             {"config": json.dumps(config, ensure_ascii=False),
              "b": current_business_id()})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     return jsonify({"logo_url": blob.public_url})
 
 
@@ -308,6 +338,7 @@ def put_scrapfly():
     execute("UPDATE " + BUSINESSES_TABLE + " SET config = :config WHERE id = :b",
             {"config": json.dumps(config, ensure_ascii=False),
              "b": current_business_id()})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     logger.info("Scrapfly token updated for business %s", current_business_id())
     return jsonify({"status": "ok"})
 
@@ -370,6 +401,7 @@ def put_stock_sync():
     execute("UPDATE " + BUSINESSES_TABLE + " SET config = :config WHERE id = :b",
             {"config": json.dumps(config, ensure_ascii=False),
              "b": current_business_id()})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     logger.info("IMS stock_sync updated for business %s: provider=%s",
                 current_business_id(), provider)
     return jsonify({"status": "ok"})

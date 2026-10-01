@@ -1,4 +1,6 @@
 from flask import Blueprint, request, jsonify
+
+from app import cache
 from app.integrations.core.credentials import get_account_owner, UnknownAccount
 from app.db.claims import claim, finish, fail
 from app.pipelines.sells import process_order
@@ -126,6 +128,9 @@ def _claim_and_run(account, source, event_type, order_id, order):
 
     # 4. Success -> mark done.
     finish(event_id)
+    # La orden tocó stock/productos del negocio: invalidar la cache DESPUÉS
+    # de la escritura (ver app/cache.py).
+    cache.invalidate_business(account.get("business_id"))
     return jsonify({"status": "done"}), 200
 
 

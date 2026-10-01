@@ -1,6 +1,8 @@
 import hashlib
 import hmac
 from flask import Blueprint, request, jsonify
+
+from app import cache
 from app.db.claims import claim, fail, finish, resolve_actor
 from app.pipelines.publish import pipeline_publish
 from app.utils.logger import logger, set_event_id
@@ -76,6 +78,9 @@ def main():
         return jsonify({"status": "failed"}), 500
 
     finish(event_id)
+    # La pipeline tocó listados/producto: invalidar la cache del negocio
+    # DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(account.get("business_id"))
     return jsonify({"status": "done"}), 200
 
 

@@ -19,6 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from app import cache
 from app.api.auth_utils import make_admin_token, require_admin, current_admin
 from app.db.engine import engine
 from app.db.helpers import execute, get_all, get_one, insert_and_get_id
@@ -212,6 +213,9 @@ def platform_patch_business(business_id):
 
     execute("UPDATE " + BUSINESSES_TABLE + " SET active = :active WHERE id = :id",
             {"active": 1 if data["active"] else 0, "id": business_id})
+    # Desactivación estricta: invalidar el chequeo cacheado de "negocio
+    # activo" (auth_utils._token_user_active) al instante.
+    cache.invalidate_business(business_id)
     logger.info("Platform admin set business %s active=%s", business_id, data["active"])
 
     row = get_one(

@@ -9,10 +9,11 @@ import math
 from datetime import date, datetime
 from decimal import Decimal
 
-from flask import Blueprint, jsonify, make_response, request
+from flask import Blueprint, Response, jsonify, make_response, request, stream_with_context
 
+from app import cache
 from app.api.auth_utils import current_business_id, require_auth
-from app.db.helpers import execute, get_all, get_one, insert_and_get_id, run_parallel
+from app.db.helpers import execute, get_all, get_one, insert_and_get_id, run_parallel, stream_rows
 from app.settings.config import SCHEMA_INVENTORY
 from app.utils.logger import logger
 
@@ -27,6 +28,12 @@ MAX_IMAGES_PER_PRODUCT = 10
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
+# TTLs de la cache en memoria (ver app/cache.py). Cortos a propósito: el
+# dashboard tolera segundos de latencia en lecturas repetidas y cada
+# escritura invalida su negocio de todos modos.
+TTL_PRODUCTS_LIST = 30
+TTL_CATEGORIES = 60
+
 
 def csv_response(columns, rows, filename):
     """CSV con header en español (etiquetas de `columns`), BOM para Excel y
@@ -40,6 +47,37 @@ def csv_response(columns, rows, filename):
             for c in columns
         ])
     response = make_response("\uFEFF" + buf.getvalue())
+    response.headers["Content-Type"] = "text/csv; charset=utf-8"
+    response.headers["Content-Disposition"] = 'attachment; filename="%s"' % filename
+    return response
+
+
+def stream_csv_response(columns, row_batches, filename):
+    """CSV generado incrementalmente: header + las filas a medida que llegan.
+
+    `row_batches` es un generador de listas de dicts (helpers.stream_rows).
+    La memoria del proceso no crece con el tamaño del export: solo se
+    materializa un batch por vez.
+    """
+    def generate():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        yield "\uFEFF"  # BOM para Excel (una vez, antes del header)
+        buf.seek(0)
+        buf.truncate(0)
+        writer.writerow([c["label"] for c in columns])
+        yield buf.getvalue()
+        for batch in row_batches:
+            buf.seek(0)
+            buf.truncate(0)
+            for row in batch:
+                writer.writerow([
+                    "" if row.get(c["key"]) is None else row.get(c["key"])
+                    for c in columns
+                ])
+            yield buf.getvalue()
+
+    response = Response(stream_with_context(generate()))
     response.headers["Content-Type"] = "text/csv; charset=utf-8"
     response.headers["Content-Disposition"] = 'attachment; filename="%s"' % filename
     return response
@@ -198,21 +236,9 @@ _TN_STATUS_SQL = (
 )
 
 
-@inventory_bp.route("/products", methods=["GET"])
-@require_auth
-def list_products():
-    q = (request.args.get("q") or "").strip()
-    category = (request.args.get("category") or "").strip()
-    ml_status = (request.args.get("ml_status") or "").strip()
-    tn_status = (request.args.get("tn_status") or "").strip()
-    channel = (request.args.get("channel") or "").strip()
-    stock = (request.args.get("stock") or "").strip()
-    try:
-        page = max(1, int(request.args.get("page") or 1))
-        page_size = min(200, max(1, int(request.args.get("page_size") or 50)))
-    except ValueError:
-        return jsonify({"error": "bad_request", "message": "Paginación inválida"}), 400
-
+def _list_products_payload(business_id, q, category, ml_status, tn_status,
+                           channel, stock, page, page_size):
+    """Payload JSON del listado de productos (cacheable, sin request context)."""
     like_q = "%" + q + "%"
     filters = (
         " WHERE p.business_id = :business_id"
@@ -232,7 +258,7 @@ def list_products():
     inner = None  # built on demand inside the computed-filters branch below
 
     base_params = {
-        "business_id": current_business_id(),
+        "business_id": business_id,
         "q": q,
         "like_q": like_q,
         "category": category,
@@ -335,13 +361,41 @@ def list_products():
             "image_url": row.get("image_url"),
         })
 
-    return jsonify({
+    return {
         "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
         "pages": math.ceil(total / page_size) if total else 0,
-    })
+    }
+
+
+@inventory_bp.route("/products", methods=["GET"])
+@require_auth
+def list_products():
+    q = (request.args.get("q") or "").strip()
+    category = (request.args.get("category") or "").strip()
+    ml_status = (request.args.get("ml_status") or "").strip()
+    tn_status = (request.args.get("tn_status") or "").strip()
+    channel = (request.args.get("channel") or "").strip()
+    stock = (request.args.get("stock") or "").strip()
+    try:
+        page = max(1, int(request.args.get("page") or 1))
+        page_size = min(200, max(1, int(request.args.get("page_size") or 50)))
+    except ValueError:
+        return jsonify({"error": "bad_request", "message": "Paginación inválida"}), 400
+
+    # Cache en memoria por (negocio, filtros, página): la clave lleva la
+    # versión del business, así cualquier escritura de productos/listados
+    # la invalida automáticamente (ver app/cache.py).
+    business_id = current_business_id()
+    payload = cache.get_or_compute(
+        business_id, "products_list", TTL_PRODUCTS_LIST,
+        lambda: _list_products_payload(
+            business_id, q, category, ml_status, tn_status, channel, stock,
+            page, page_size),
+        q, category, ml_status, tn_status, channel, stock, page, page_size)
+    return jsonify(payload)
 
 
 _EXPORT_COLUMNS = [
@@ -449,28 +503,41 @@ def export_products_csv():
         sql += " LIMIT :limit"
         params["limit"] = limit
 
-    rows = get_all(sql, params)
-    # Valores legibles para el CSV.
-    for r in rows:
-        r["ml_status"] = _STATUS_LABELS.get(r.get("ml_status"), r.get("ml_status"))
-        r["tn_status"] = _STATUS_LABELS.get(r.get("tn_status"), r.get("tn_status"))
-        r["ml_price_manual"] = "Manual" if r.get("ml_price_manual") else "Auto"
-        r["tn_price_manual"] = "Manual" if r.get("tn_price_manual") else "Auto"
+    # UNA sola query con cursor server-side: las filas se leen en batches de
+    # 1000 y se escriben al CSV a medida que llegan, así la memoria del
+    # proceso no crece con el tamaño del export. El `limit` sigue vivo como
+    # LIMIT dentro de la misma query.
+    def _batches():
+        for batch in stream_rows(sql, params):
+            # Valores legibles para el CSV.
+            for r in batch:
+                r["ml_status"] = _STATUS_LABELS.get(r.get("ml_status"), r.get("ml_status"))
+                r["tn_status"] = _STATUS_LABELS.get(r.get("tn_status"), r.get("tn_status"))
+                r["ml_price_manual"] = "Manual" if r.get("ml_price_manual") else "Auto"
+                r["tn_price_manual"] = "Manual" if r.get("tn_price_manual") else "Auto"
+            yield batch
 
     stamp = datetime.now().strftime("%Y%m%d")
-    return csv_response(columns, rows, "inventario-%s.csv" % stamp)
+    return stream_csv_response(columns, _batches(), "inventario-%s.csv" % stamp)
 
 
 @inventory_bp.route("/categories", methods=["GET"])
 @require_auth
 def list_categories():
     """Categorías distintas del negocio (para el filtro del inventario)."""
-    rows = get_all(
-        "SELECT DISTINCT category FROM " + PRODUCTS_TABLE
-        + " WHERE business_id = :business_id AND category IS NOT NULL AND category <> ''"
-        + " ORDER BY category",
-        {"business_id": current_business_id()})
-    return jsonify({"items": [r["category"] for r in rows]})
+    business_id = current_business_id()
+    items = cache.get_or_compute(
+        business_id, "categories", TTL_CATEGORIES,
+        lambda: [
+            r["category"]
+            for r in get_all(
+                "SELECT DISTINCT category FROM " + PRODUCTS_TABLE
+                + " WHERE business_id = :business_id"
+                + " AND category IS NOT NULL AND category <> ''"
+                + " ORDER BY category",
+                {"business_id": business_id})
+        ])
+    return jsonify({"items": items})
 
 
 @inventory_bp.route("/products/<int:product_id>", methods=["GET"])
@@ -680,6 +747,7 @@ def prepublish_product(product_id):
     execute("UPDATE " + PRODUCTS_TABLE + " SET " + fields_sql
             + " WHERE id = :id AND business_id = :business_id",
             dict(db_updates, id=product_id, business_id=current_business_id()))
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
 
     return jsonify({"product": _product_dict(_owned_product(product_id)),
                     "filled": [column_map[k] for k in updates]})
@@ -734,6 +802,7 @@ def patch_product(product_id):
     params = dict(updates, id=product_id, business_id=current_business_id())
     execute("UPDATE " + PRODUCTS_TABLE + " SET " + fields
             + " WHERE id = :id AND business_id = :business_id", params)
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
 
     return jsonify({"product": _list_product_dict(product_id)})
 
@@ -757,6 +826,7 @@ def delete_product(product_id):
         {"id": product_id, "business_id": current_business_id()})
     if not rowcount:
         return jsonify({"error": "not_found", "message": "Producto no encontrado"}), 404
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     logger.info("Product %s deleted by business %s", product_id, current_business_id())
     return ("", 204)
 
@@ -827,6 +897,7 @@ def upload_image(product_id):
     image_id = insert_and_get_id(
         "INSERT INTO " + IMAGES_TABLE + " (product_id, url) VALUES (:product_id, :url)",
         {"product_id": product_id, "url": blob.public_url})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     return jsonify({"id": image_id, "url": blob.public_url}), 201
 
 
@@ -854,6 +925,7 @@ def delete_image(product_id, image_id):
         logger.exception("GCS delete failed for image %s", image_id)
 
     execute("DELETE FROM " + IMAGES_TABLE + " WHERE id = :id", {"id": image_id})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
     return ("", 204)
 
 
