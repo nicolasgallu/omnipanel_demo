@@ -288,18 +288,27 @@ def _missing_required_attributes(item_data):
     Se usa ANTES de publicar: Meli rechaza el item si un atributo required
     viaja vacío (lo descarta y falta), pero su mensaje mezcla warnings con
     errores. Acá devolvemos los nombres legibles de lo que falta.
+
+    En modo catálogo (catalog_product_id presente) solo exigen los
+    `catalog_required` (ej. BACKPACK_TYPE): el resto lo aporta la ficha de
+    Meli. En tradicional se exigen los `required`.
     """
     missing = []
     try:
         settings = json.loads(item_data.get('settings') or '[]')
     except Exception:
         return missing
+    catalog = bool(item_data.get('catalog_product_id'))
     for group in settings:
         for item in group.get('attributes') or []:
-            # Filas viejas no traen la flag `required`: el builder solo
-            # guardaba required, así que default True preserva ese contrato.
-            if not item.get('required', True):
-                continue
+            if catalog:
+                if not item.get('catalog_required'):
+                    continue
+            else:
+                # Filas viejas no traen la flag `required`: el builder solo
+                # guardaba required, así que default True preserva ese contrato.
+                if not item.get('required', True):
+                    continue
             val = item.get('user_input_value')
             if val is None or str(val).strip() == '':
                 missing.append(str(item.get('name') or item.get('id')))

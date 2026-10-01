@@ -215,6 +215,16 @@ export function MLChannelPanel({
   const [pubMode, setPubMode] = useState<'traditional' | 'catalog'>(
     listing?.catalog_listing ? 'catalog' : 'traditional')
   const [catalogMatch, setCatalogMatch] = useState<CatalogProduct | null>(null)
+  // Categoría bajo la cual se eligió la ficha (para NO descartarla al
+  // reconfirmar la misma categoría — antes se borraba siempre).
+  const catalogMatchCategoryRef = useRef<string | null>(null)
+  const chooseCatalogMatch = useCallback(
+    (c: CatalogProduct | null) => {
+      setCatalogMatch(c)
+      catalogMatchCategoryRef.current = c ? categoryId : null
+    },
+    [categoryId],
+  )
   // Catálogo obligatorio para la categoría/GTIN actual: la opción tradicional
   // queda bloqueada en el paso Tipo. Se setea en el pre-flight de
   // confirmCategory (búsqueda exacta por GTIN) y, reactivamente, cuando el
@@ -327,8 +337,14 @@ export function MLChannelPanel({
       // que esos valores aparezcan seleccionados en los campos.
       setMlCfg(mlCfgFromSettings(res))
 
-      // La ficha elegida era de la categoría anterior: se descarta.
-      setCatalogMatch(null)
+      // La ficha elegida era de la categoría anterior: se descarta SOLO si la
+      // categoría cambió de verdad. Reconfirmar la misma categoría mantiene
+      // la ficha (antes se borraba siempre y Publicar fallaba con "Elegí una
+      // ficha..." aunque ya la hubieras elegido).
+      if (categoryId !== catalogMatchCategoryRef.current) {
+        setCatalogMatch(null)
+        catalogMatchCategoryRef.current = null
+      }
       // Pre-flight catálogo obligatorio: búsqueda EXACTA por GTIN (sin
       // ambigüedad de nombres). Si todas las fichas son catalog_required,
       // el paso Tipo arranca con tradicional bloqueada y catálogo
@@ -385,6 +401,9 @@ export function MLChannelPanel({
             category_id: (categoryId ?? savedCategoryId) ?? undefined,
             listing_type: mlCfg.listing_type,
             catalog_product_id: !edited && catalogMatch ? catalogMatch.id : undefined,
+            // Los atributos catalog_required (ej. "Tipo de mochila") se mandan
+            // también en catálogo: Meli los exige igual.
+            attributes: mlCfg.values,
           }
         : {
             category_id: (categoryId ?? savedCategoryId) ?? undefined,
@@ -456,7 +475,9 @@ export function MLChannelPanel({
     } finally {
       setLoading(false)
     }
-  }, [loading, account, mlCfg, categoryId, savedCategoryId, edited, hasMeliItem, product.id, onChanged, onReload])
+  }, [loading, account, mlCfg, categoryId, savedCategoryId, edited, hasMeliItem,
+      pubMode, catalogMatch, priceValue, listing,
+      product.id, onChanged, onReload])
 
   // Costos de venta: snapshot real de mercadolibre.selling_costs.
   useEffect(() => {
@@ -567,6 +588,7 @@ export function MLChannelPanel({
     // no deben sobrevivir al borrado (causaban publicaciones fantasma).
     setPubMode('traditional')
     setCatalogMatch(null)
+    catalogMatchCategoryRef.current = null
     setPrepublishedView(false)
   }
 
@@ -650,7 +672,7 @@ export function MLChannelPanel({
           mode={pubMode}
           setMode={setPubMode}
           match={catalogMatch}
-          setMatch={setCatalogMatch}
+          setMatch={chooseCatalogMatch}
           mandatory={catalogMandatory}
           setMandatory={setCatalogMandatory}
           accountId={account.id}
@@ -674,17 +696,24 @@ export function MLChannelPanel({
       )}
 
       {isActive && step === configStep && (catalogActive ? (
-        <MLCatalogConfigStep
-          product={product}
-          match={catalogMatch}
-          cfg={{ listing_type: mlCfg.listing_type }}
-          set={(_, v) => setMl('listing_type', v)}
-          listingTypes={listingTypes}
-          listingTypesError={listingTypesError}
-          onRetryListingTypes={() => setListingTypesKey((k) => k + 1)}
-          priceValue={priceValue}
-          onPriceChange={setPriceValue}
-        />
+        <>
+          <MLCatalogConfigStep
+            product={product}
+            match={catalogMatch}
+            cfg={{ listing_type: mlCfg.listing_type }}
+            set={(_, v) => setMl('listing_type', v)}
+            listingTypes={listingTypes}
+            listingTypesError={listingTypesError}
+            onRetryListingTypes={() => setListingTypesKey((k) => k + 1)}
+            priceValue={priceValue}
+            onPriceChange={setPriceValue}
+          />
+          <CatalogRequiredAttributes
+            settings={settings}
+            values={mlCfg.values}
+            setValue={setMlValue}
+          />
+        </>
       ) : (
         <MLConfigStep
           cfg={mlCfg}
@@ -1052,8 +1081,14 @@ function AttributeCard({
   ) : null
 
   if (vt === 'boolean') {
+    // Meli manda value_examples como ["No","Sí"] (o en otro orden). La
+    // etiqueta "verdadera" es la que está en BOOLEAN_TRUE, NO options[0]:
+    // con ["No","Sí"] el toggle quedaba invertido (al encender escribía
+    // "No", `on` pasaba a false y volvía a apagarse solo).
+    const opts = options.length >= 2 ? options : ['Sí', 'No']
+    const trueLabel = BOOLEAN_TRUE.has(opts[0]) ? opts[0] : opts[1]
+    const falseLabel = trueLabel === opts[0] ? opts[1] : opts[0]
     const on = BOOLEAN_TRUE.has(value)
-    const [trueLabel, falseLabel] = options.length >= 2 ? [options[0], options[1]] : ['True', 'False']
     return (
       <div
         className="flex items-center justify-between px-3 py-2.5 rounded-xl"
@@ -1097,6 +1132,39 @@ function AttributeCard({
         placeholder="—"
         className="text-xs font-semibold text-right outline-none bg-transparent flex-1 min-w-0 text-ink"
       />
+    </div>
+  )
+}
+
+function CatalogRequiredAttributes({
+  settings,
+  values,
+  setValue,
+}: {
+  settings: MLSettings | null
+  values: Record<string, string>
+  setValue: (id: string, v: string) => void
+}) {
+  // En modo catálogo Meli exige igual algunos atributos de la categoría
+  // (flag `catalog_required`, ej. "Tipo de mochila"). Se muestran SOLO esos,
+  // no el formulario completo (título/marca/fotos los aporta la ficha).
+  const items = sectionItems(settings, 'attributes').filter(
+    (i) => i.catalog_required && i.id !== 'LISTING_TYPE',
+  )
+  if (items.length === 0) return null
+  return (
+    <div className="flex flex-col gap-2 mt-2">
+      <SectionLabel>Atributos de la categoría</SectionLabel>
+      <div className="grid grid-cols-2 gap-2">
+        {items.map((item) => (
+          <AttributeCard
+            key={item.id}
+            item={item}
+            value={values[item.id] ?? ''}
+            onChange={(v) => setValue(item.id, v)}
+          />
+        ))}
+      </div>
     </div>
   )
 }
