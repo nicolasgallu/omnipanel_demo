@@ -1,8 +1,9 @@
 """Cache en memoria del proceso (dict + Lock) — SIN Redis.
 
 Absorbe lecturas repetidas del dashboard (lista de productos, categorías,
-settings, ai.prompts, resumen de ml_listings y el chequeo de "negocio activo"
-de los tokens) sin agregar infraestructura.
+settings, ai.prompts, resumen y filas de ml_listings, filas de tn_listings,
+el access token de credenciales y el chequeo de "negocio activo" de los
+tokens) sin agregar infraestructura.
 
 Características:
 - Thread-safe: gunicorn corre UN proceso con 8 threads (gthread) y todas las

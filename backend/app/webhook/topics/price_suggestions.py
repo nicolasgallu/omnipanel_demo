@@ -7,6 +7,7 @@ los fallos se loguean y la fila del inbox queda como red de seguridad.
 """
 import json
 
+from app import cache
 from app.db.helpers import execute
 from app.integrations.core.credentials import get_access_token
 from app.integrations.mercadolibre.product_handler import _meli_request
@@ -52,18 +53,31 @@ def _upsert(account, item_id, current_price, suggested_price, status, data):
             "data": data,
         },
     )
+    # El precio sugerido viaja en las filas cacheadas de la vista ML:
+    # invalidar DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(account.get("business_id"))
     logger.info("Stored Meli price suggestion %s", item_id)
+
+
+def _meli_item_id(parts):
+    """Extrae el item id de Meli de los segmentos del resource.
+
+    Los ids de Meli arrancan con "ML" (MLA123...); se busca el primer
+    segmento con esa forma empezando por el final — funciona con y sin '/'
+    inicial y con o sin sufijo '/details'.
+    """
+    for part in reversed(parts):
+        if part and len(part) >= 4 and part[:2] == "ML":
+            return part
+    return None
 
 
 def handle(account, data):
     """Topic 'price_suggestion'."""
     token = get_access_token(account["id"]).get("access_token")
     resource = data.get("resource") or ""
-    parts = resource.split("/")
-    # suggestions/items/MLA123456/details -> item_id en la posición 2
-    item_id = parts[2] if len(parts) > 2 else None
-    if not item_id and len(parts) >= 2:
-        item_id = parts[-2]
+    # resource: /suggestions/items/MLA123456/details -> MLA123456
+    item_id = _meli_item_id(resource.split("/"))
     if not item_id:
         return
 
@@ -89,9 +103,8 @@ def handle_competition(account, data):
     """Topic 'catalog_item_competition_status'."""
     token = get_access_token(account["id"]).get("access_token")
     resource = data.get("resource") or ""
-    parts = resource.split("/")
-    # /items/MLA123/price_to_win -> item_id en la penúltima posición
-    item_id = parts[-2] if len(parts) >= 2 else None
+    # resource: /items/MLA123/price_to_win -> MLA123
+    item_id = _meli_item_id(resource.split("/"))
     if not item_id:
         return
 

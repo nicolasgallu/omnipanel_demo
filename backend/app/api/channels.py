@@ -59,6 +59,11 @@ TN_ATTRIBUTES_TABLE = "tiendanube.attributes"
 # Resumen de publicaciones ML: TTL corto — la vista se refresca seguido y
 # publish/pause/delete/price (y los webhooks de items) lo invalidan.
 TTL_ML_SUMMARY = 15
+# Filas de las vistas ML/TN (paginadas): mismo TTL que el resumen ML para que
+# refresquen juntos. TN no tiene escritores externos (solo el dashboard), así
+# que aguanta un poco más.
+TTL_ML_ROWS = 15
+TTL_TN_ROWS = 30
 
 TN_DEFAULT_SETTINGS = {
     "SEO_TITLE": {"DEFAULT_VALUE": None, "USER_INPUT_VALUE": None},
@@ -1294,6 +1299,9 @@ def ml_performance_refresh():
          "score": score, "level": body.get("level"),
          "level_wording": body.get("level_wording"),
          "buckets": json.dumps(buckets, ensure_ascii=False)})
+    # La performance viaja en las filas cacheadas de la vista ML: invalidar
+    # DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(current_business_id())
 
     row = get_one(
         "SELECT score, level, level_wording, buckets, updated_at"
@@ -1602,6 +1610,48 @@ def ml_listings():
     except LookupError as exc:
         return jsonify({"error": "bad_request", "message": str(exc)}), 400
 
+    business_id = current_business_id()
+
+    # Filas + total: cache corta por (filtros, página) — la query pesada
+    # (4 LEFT JOINs) se paga una sola vez por combinación.
+    rows_payload = cache.get_or_compute(
+        business_id, "ml_listings_rows", TTL_ML_ROWS,
+        lambda: _ml_listings_rows_payload(
+            business_id, q, status, perf, category, page, page_size),
+        q, status, perf, category, page, page_size)
+
+    # Resumen (listed/published/paused/avg_perf): otro scope (TODO el negocio,
+    # sin filtros) -> cache corta invalidada por versión del business
+    # (publish/pause/delete/price, webhooks de items, price_suggestions y
+    # performance refresh). Mismo TTL que las filas: refrescan juntos.
+    def _compute_summary():
+        row = get_one(
+            "SELECT COUNT(*) AS listed,"
+            " SUM(CASE WHEN ml.status IN ('active','Active','Updated.') THEN 1 ELSE 0 END) AS published,"
+            " SUM(CASE WHEN ml.status IN ('paused','Paused.') THEN 1 ELSE 0 END) AS paused,"
+            " AVG(perf.score) AS avg_perf"
+            " FROM inventory.products p"
+            " JOIN mercadolibre.product_listings ml ON ml.product_id = p.id"
+            " LEFT JOIN mercadolibre.performance perf ON perf.product_listing_id = ml.id"
+            " WHERE p.business_id = :b AND (" + ML_LISTED_STATUS_SQL + ")",
+            {"b": business_id})
+        avg = row.get("avg_perf")
+        return {
+            "listed": int(row["listed"] or 0),
+            "published": int(row["published"] or 0),
+            "paused": int(row["paused"] or 0),
+            "avg_perf": round(float(avg), 1) if avg is not None else None,
+        }
+
+    summary = cache.get_or_compute(
+        business_id, "ml_listings_summary", TTL_ML_SUMMARY,
+        _compute_summary)
+    return jsonify(dict(rows_payload, summary=summary))
+
+
+def _ml_listings_rows_payload(business_id, q, status, perf, category, page,
+                              page_size):
+    """Filas + total de la vista ML (cacheable, sin request context)."""
     like_q = "%" + q + "%"
     filters = (
         " WHERE p.business_id = :b"
@@ -1625,7 +1675,7 @@ def ml_listings():
             perf_filter += " AND perf.score < 50"
 
     base_params = {
-        "b": current_business_id(),
+        "b": business_id,
         "q": q,
         "like_q": like_q,
         "category": category,
@@ -1661,29 +1711,6 @@ def ml_listings():
         + joins + filters + perf_filter
         + " ORDER BY p.updated_at DESC, p.id DESC LIMIT :limit OFFSET :offset",
         params)
-
-    # Resumen (listed/published/paused/avg_perf): otro scope (TODO el negocio,
-    # sin filtros) -> cache corta invalidada por versión del business
-    # (publish/pause/delete/price + webhooks de items).
-    def _compute_summary():
-        row = get_one(
-            "SELECT COUNT(*) AS listed,"
-            " SUM(CASE WHEN ml.status IN ('active','Active','Updated.') THEN 1 ELSE 0 END) AS published,"
-            " SUM(CASE WHEN ml.status IN ('paused','Paused.') THEN 1 ELSE 0 END) AS paused,"
-            " AVG(perf.score) AS avg_perf"
-            + joins + " WHERE p.business_id = :b AND (" + ML_LISTED_STATUS_SQL + ")",
-            {"b": current_business_id()})
-        avg = row.get("avg_perf")
-        return {
-            "listed": int(row["listed"] or 0),
-            "published": int(row["published"] or 0),
-            "paused": int(row["paused"] or 0),
-            "avg_perf": round(float(avg), 1) if avg is not None else None,
-        }
-
-    summary = cache.get_or_compute(
-        current_business_id(), "ml_listings_summary", TTL_ML_SUMMARY,
-        _compute_summary)
 
     items = []
     for row in rows:
@@ -1729,14 +1756,13 @@ def ml_listings():
     # DB, mismo patrón que list_products). Página fuera de rango -> 0.
     total = int(rows[0]["total"] or 0) if rows else 0
 
-    return jsonify({
+    return {
         "items": items,
-        "summary": summary,
         "total": total,
         "page": page,
         "page_size": page_size,
         "pages": _pages_for(total, page_size),
-    })
+    }
 
 
 ML_EXPORT_COLUMNS = [
@@ -1890,6 +1916,21 @@ def tn_listings():
     except LookupError as exc:
         return jsonify({"error": "bad_request", "message": str(exc)}), 400
 
+    business_id = current_business_id()
+
+    # Vista TN: cache de la página entera (filas + resumen + total) por
+    # (filtros, página). El único escritor es el dashboard (ya invalida),
+    # así que el TTL es solo red de seguridad.
+    payload = cache.get_or_compute(
+        business_id, "tn_listings", TTL_TN_ROWS,
+        lambda: _tn_listings_payload(
+            business_id, q, status, category, page, page_size),
+        q, status, category, page, page_size)
+    return jsonify(payload)
+
+
+def _tn_listings_payload(business_id, q, status, category, page, page_size):
+    """Página completa de la vista TN (cacheable, sin request context)."""
     like_q = "%" + q + "%"
     filters = (
         " WHERE p.business_id = :b"
@@ -1902,7 +1943,7 @@ def tn_listings():
         "   OR (:status = 'prepublished' AND tn.status LIKE 'Procesando%'))"
     )
     base_params = {
-        "b": current_business_id(),
+        "b": business_id,
         "q": q,
         "like_q": like_q,
         "category": category,
@@ -1931,7 +1972,7 @@ def tn_listings():
         " SUM(CASE WHEN tn.status IN ('Published','Updated.','published','active') THEN 1 ELSE 0 END) AS published,"
         " SUM(CASE WHEN tn.status IN ('paused','Paused.') THEN 1 ELSE 0 END) AS paused"
         + joins + " WHERE p.business_id = :b AND (" + TN_LISTED_STATUS_SQL + ")",
-        {"b": current_business_id()})
+        {"b": business_id})
 
     items = []
     for row in rows:
@@ -1958,7 +1999,7 @@ def tn_listings():
     total = int(get_one(
         "SELECT COUNT(*) AS total" + joins + filters, base_params)["total"] or 0)
 
-    return jsonify({
+    return {
         "items": items,
         "summary": {
             "listed": int(summary["listed"] or 0),
@@ -1970,7 +2011,7 @@ def tn_listings():
         "page": page,
         "page_size": page_size,
         "pages": _pages_for(total, page_size),
-    })
+    }
 
 
 TN_EXPORT_COLUMNS = [

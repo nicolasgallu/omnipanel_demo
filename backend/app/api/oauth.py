@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 import requests
 from flask import Blueprint, jsonify, request
 
+from app import cache
 from app.db.helpers import execute, get_all, get_one
 from app.settings.config import SCHEMA_ACCOUNTS
 from app.utils.logger import logger
@@ -198,6 +199,9 @@ def _save_tokens(account_id, code, access_token, refresh_token=None, expires_at=
         {"code": code, "access_token": access_token,
          "refresh_token": refresh_token, "expires_at": expires_at,
          "account_id": account_id})
+    # El token quedó cacheado (credentials.get_access_token): invalidar la
+    # entrada de esta cuenta DESPUÉS de la escritura (ver app/cache.py).
+    cache.invalidate_business(account_id)
 
 
 def _bad(message):
