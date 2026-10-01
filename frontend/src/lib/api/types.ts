@@ -335,9 +335,18 @@ export interface NotificationEventSetting {
   telegram: boolean
 }
 
+export type NotifChannel = 'whatsapp' | 'telegram'
+
+export interface NotificationContact {
+  id: string
+  label: string
+  destination: string
+  enabled: boolean
+}
+
 export interface NotificationSettings {
-  whatsapp_phone: string | null
-  telegram_chat_id: string | null
+  whatsapp_contacts: NotificationContact[]
+  telegram_contacts: NotificationContact[]
   events: Record<NotificationEventKey, NotificationEventSetting>
 }
 

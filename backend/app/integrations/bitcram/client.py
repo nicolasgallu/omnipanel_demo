@@ -1,5 +1,8 @@
 import json
+import time
+
 import requests
+
 from app.utils.logger import logger
 
 class BitcramError(Exception):
@@ -26,10 +29,13 @@ def post_sale_doc(config, internal_code, quantity, unit_price):
     doc = _commercial_doc(checkout, payment_type_id, payment_type, iva_condition,
                           internal_code, quantity, unit_price)
 
+    started = time.monotonic()
     response = requests.post(
         base_url + "/api/commercial_docs/index",
         headers=headers, json=doc, timeout=30,
     )
+    logger.info("bitcram_http POST /api/commercial_docs/index -> %s (%.0fms)",
+                response.status_code, (time.monotonic() - started) * 1000)
 
 
     if response.status_code >= 500:
@@ -43,12 +49,15 @@ def post_sale_doc(config, internal_code, quantity, unit_price):
 
 
 def _open_checkout(base_url, checkout_number, headers):
+    started = time.monotonic()
     response = requests.get(
         base_url + "/api/checkouts/index",
         headers=headers,
         params={"where": json.dumps({"checkouts.checkout_number": checkout_number})},
         timeout=30,
     )
+    logger.info("bitcram_http GET /api/checkouts/index -> %s (%.0fms)",
+                response.status_code, (time.monotonic() - started) * 1000)
     response.raise_for_status()
     items = response.json().get("items", [])
     if not items:
@@ -63,10 +72,13 @@ def _open_checkout(base_url, checkout_number, headers):
 
 
 def _payment_type_id(base_url, session_id, headers):
+    started = time.monotonic()
     response = requests.get(
         base_url + "/api/checkout_sessions/index/" + str(session_id),
         headers=headers, timeout=30,
     )
+    logger.info("bitcram_http GET /api/checkout_sessions/index -> %s (%.0fms)",
+                response.status_code, (time.monotonic() - started) * 1000)
     response.raise_for_status()
     accounts = response.json().get("checkout_session_accounts", [])
     if not accounts:

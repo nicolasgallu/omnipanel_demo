@@ -60,12 +60,18 @@ def _tn_request(method, url, token, json_body=None, timeout=30):
                "Content-Type": "application/json"}
     attempts = 3 if method in TN_RETRYABLE_METHODS else 1
     for attempt in range(attempts):
+        started = time.monotonic()
         response = requests.request(
             method, url, headers=headers,
             data=json.dumps(json_body, default=str) if json_body is not None else None,
             timeout=timeout,
         )
         if attempt == attempts - 1 or response.status_code not in TN_RETRY_STATUSES:
+            # Fase 3: una línea por llamada HTTP a Tienda Nube (método, URL,
+            # status, intento y duración).
+            logger.info("tn_http %s %s -> %s (attempt=%d, %.0fms)",
+                        method, url, response.status_code, attempt + 1,
+                        (time.monotonic() - started) * 1000)
             return response
         delay = 2 ** attempt  # 1s, luego 2s
         if response.status_code == 429:

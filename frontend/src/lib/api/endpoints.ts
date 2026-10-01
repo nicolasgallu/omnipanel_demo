@@ -21,6 +21,8 @@ import type {
   MLPerformance,
   MLSellingCosts,
   MLSettings,
+  NotifChannel,
+  NotificationContact,
   NotificationSettings,
   Paginated,
   PrepublishResult,
@@ -152,10 +154,13 @@ export const notificationsApi = {
       method: 'PUT',
       body: settings,
     }),
-  test: (channel: 'whatsapp' | 'telegram') =>
+  test: (
+    channel: NotifChannel,
+    contact: Pick<NotificationContact, 'destination'>,
+  ) =>
     api<{ status: string }>('/api/notifications/test', {
       method: 'POST',
-      body: { channel },
+      body: { channel, contact },
     }),
 }
 

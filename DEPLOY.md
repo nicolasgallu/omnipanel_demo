@@ -44,21 +44,29 @@ gcloud projects add-iam-policy-binding nicoservertest \
   --member="serviceAccount:$SA" --role=roles/storage.objectAdmin
 ```
 
-### Permisos del service account de Cloud Build
+### Permisos de quien ejecuta el deploy
 
-El paso de deploy corre con la SA de Cloud Build; necesita desplegar en Cloud
-Run y actuar como la SA del runtime:
+El paso de deploy de Cloud Build corre, según el proyecto, como **la SA de Cloud
+Build** (`<nro>@cloudbuild.gserviceaccount.com`) o como **la Compute default**
+(`<nro>-compute@developer.gserviceaccount.com`). La que ejecute el deploy
+necesita `run.admin` (desplegar) + `iam.serviceAccountUser` (actuar como la SA
+del runtime).
+
+⚠️ El account real aparece en el error del build (ej.
+`402745694567-compute@developer.gserviceaccount.com`). Ese es el que tenés que
+autorizar, NO necesariamente el de Cloud Build:
 
 ```bash
-CB=$(gcloud projects describe nicoservertest --format='value(projectNumber)')@cloudbuild.gserviceaccount.com
+DEPLOYER=402745694567-compute@developer.gserviceaccount.com   # ← el de TU error
 gcloud projects add-iam-policy-binding nicoservertest \
-  --member="serviceAccount:$CB" --role=roles/run.admin
+  --member="serviceAccount:$DEPLOYER" --role=roles/run.admin
 gcloud projects add-iam-policy-binding nicoservertest \
-  --member="serviceAccount:$CB" --role=roles/iam.serviceAccountUser
+  --member="serviceAccount:$DEPLOYER" --role=roles/iam.serviceAccountUser
 ```
 
-(Alternativa en consola: Cloud Build → Settings → activar "Cloud Run Admin" y
-"Service Account User".)
+Alternativa más limpia: en el trigger de Cloud Build → "Service account", elegí
+la SA de Cloud Build (`<nro>@cloudbuild.gserviceaccount.com`) y autorizá esa en
+vez de la compute default.
 
 ### Cloud SQL
 

@@ -16,6 +16,7 @@ loguea y el caller sigue de largo.
 import json
 import re
 import time
+import uuid
 
 import requests
 from requests.exceptions import RequestException
@@ -176,11 +177,98 @@ def enviar_documento_telegram(token, chat_id, document_url, caption):
                 raise
 
 
+# Máximo de contactos por canal (WhatsApp y Telegram).
+MAX_CONTACTS_PER_CHANNEL = 10
+MAX_LABEL_LENGTH = 24
+
+
+def _channel_name(channel):
+    return "WhatsApp" if channel == "whatsapp" else "Telegram"
+
+
+def _destination_key(channel, destination):
+    """Clave de dedupe: dígitos (WPP, ignora formato) o chat id exacto (TG)."""
+    return re.sub(r"\D", "", destination) if channel == "whatsapp" else destination
+
+
+def _clean_destination(channel, value):
+    """Valida el destino de un contacto y lo devuelve limpio (trim).
+
+    Contrato del front: WhatsApp en formato internacional (10-15 dígitos),
+    Telegram chat id numérico. Mensajes espejo de los del front.
+    """
+    destination = value.strip() if isinstance(value, str) else ""
+    if channel == "whatsapp":
+        if not destination:
+            raise ValueError("Ingresá un número de WhatsApp.")
+        if (not re.fullmatch(r"\+?[\d\s\-()]+", destination)
+                or not 10 <= len(re.sub(r"\D", "", destination)) <= 15):
+            raise ValueError(
+                "Número inválido. Usá formato internacional con código de "
+                "país, ej. +54 9 11 2345 6789.")
+        return destination
+    if not destination:
+        raise ValueError("Ingresá un chat id.")
+    if not re.fullmatch(r"-?\d+", destination):
+        raise ValueError("El chat id tiene que ser numérico (ej. 123456789).")
+    return destination
+
+
+def _clean_contact_list(raw, channel):
+    """Valida la lista de contactos de un canal: normaliza, dedupea y topa.
+
+    Cada contacto queda {"id", "label", "destination", "enabled"}. El dedupe
+    es por destino normalizado y el error nombra al contacto que ya lo tiene
+    (mensaje espejo del front). El `id` es opaco: lo genera el front, pero si
+    falta se crea uno acá para no romper el guardado.
+    """
+    if not isinstance(raw, list):
+        raise ValueError("Los contactos de %s deben ser una lista"
+                         % _channel_name(channel))
+    if len(raw) > MAX_CONTACTS_PER_CHANNEL:
+        raise ValueError("Máximo %d contactos de %s por negocio"
+                         % (MAX_CONTACTS_PER_CHANNEL, _channel_name(channel)))
+
+    cleaned = []
+    seen = {}  # destino normalizado -> label del contacto que ya lo tiene
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError("Cada contacto de %s debe ser un objeto"
+                             % _channel_name(channel))
+
+        contact_id = entry.get("id")
+        if not isinstance(contact_id, str) or not contact_id.strip():
+            contact_id = "c-" + uuid.uuid4().hex[:12]
+
+        label = entry.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("Poné una etiqueta corta (ej. Nico, Depósito).")
+        label = label.strip()
+        if len(label) > MAX_LABEL_LENGTH:
+            raise ValueError("Máximo %d caracteres." % MAX_LABEL_LENGTH)
+
+        destination = _clean_destination(channel, entry.get("destination"))
+        key = _destination_key(channel, destination)
+        if key in seen:
+            raise ValueError('Este destino ya está cargado para "%s".'
+                             % seen[key])
+        seen[key] = label
+
+        enabled = entry.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError("El estado activo del contacto debe ser "
+                             "true o false")
+
+        cleaned.append({"id": contact_id, "label": label,
+                        "destination": destination, "enabled": enabled})
+    return cleaned
+
+
 def default_settings():
     """Shape completo que devuelve GET /api/notifications/settings."""
     return {
-        "whatsapp_phone": None,
-        "telegram_chat_id": None,
+        "whatsapp_contacts": [],
+        "telegram_contacts": [],
         "events": {k: dict(v) for k, v in DEFAULT_CHANNELS.items()},
     }
 
@@ -213,15 +301,33 @@ def _save_config(business_id, config):
 
 
 def load_notification_settings(business_id):
-    """Prefs guardadas + defaults: GET nunca devuelve el shape incompleto."""
+    """Prefs guardadas + defaults: GET nunca devuelve el shape incompleto.
+
+    Compat retroactiva: si el config tiene el formato viejo (un solo destino
+    por canal), se migra en memoria a una lista de 1 contacto etiquetado
+    "Principal". La API ya no expone campos legacy.
+    """
     stored = _raw_config(business_id).get("notifications") or {}
     settings = default_settings()
     if not isinstance(stored, dict):
         return settings
-    if isinstance(stored.get("whatsapp_phone"), str):
-        settings["whatsapp_phone"] = stored["whatsapp_phone"] or None
-    if isinstance(stored.get("telegram_chat_id"), str):
-        settings["telegram_chat_id"] = stored["telegram_chat_id"] or None
+
+    for channel, list_key, legacy_key in (
+            ("whatsapp", "whatsapp_contacts", "whatsapp_phone"),
+            ("telegram", "telegram_contacts", "telegram_chat_id")):
+        contacts = stored.get(list_key)
+        if isinstance(contacts, list):
+            settings[list_key] = contacts
+        else:
+            legacy = stored.get(legacy_key)
+            if isinstance(legacy, str) and legacy:
+                settings[list_key] = [{
+                    "id": "legacy-" + channel,
+                    "label": "Principal",
+                    "destination": legacy,
+                    "enabled": True,
+                }]
+
     events = stored.get("events")
     if isinstance(events, dict):
         for key in NOTIFICATION_EVENTS:
@@ -249,23 +355,12 @@ def validate_notification_settings(data):
 
     settings = default_settings()
 
-    phone = data.get("whatsapp_phone")
-    if phone is not None:
-        if not isinstance(phone, str):
-            raise ValueError("El número de WhatsApp debe ser texto")
-        phone = re.sub(r"[^\d+]", "", phone)
-        if len(re.sub(r"\D", "", phone)) < 6:
-            raise ValueError("El número de WhatsApp no es válido")
-        settings["whatsapp_phone"] = phone
-
-    chat_id = data.get("telegram_chat_id")
-    if chat_id is not None:
-        if not isinstance(chat_id, str):
-            raise ValueError("El chat id de Telegram debe ser texto")
-        chat_id = chat_id.strip()
-        if chat_id and not re.fullmatch(r"-?\d{5,}", chat_id):
-            raise ValueError("El chat id de Telegram debe ser numérico")
-        settings["telegram_chat_id"] = chat_id or None
+    # Contactos por canal (listas, máx. 10). El PUT reemplaza el objeto
+    # completo; si una lista no viene, queda vacía (la borra).
+    settings["whatsapp_contacts"] = _clean_contact_list(
+        data.get("whatsapp_contacts") or [], "whatsapp")
+    settings["telegram_contacts"] = _clean_contact_list(
+        data.get("telegram_contacts") or [], "telegram")
 
     events = data.get("events")
     if events is not None:
@@ -375,12 +470,48 @@ def _shipment_ready_caption(context):
         shipment_id, order_id)
 
 
+def _dispatch_contacts(business_id, channel, contacts, token, document_url,
+                       message):
+    """Manda el evento a todos los contactos activos del canal.
+
+    Best-effort por contacto (via `_safe_send`): si un destino falla, los
+    demás siguen. Secuencial alcanza para máx. 10 contactos (los senders ya
+    reintentan una vez); no vale la pena threads en Flask.
+    """
+    if not token:
+        logger.warning("%s notification skipped for business %s: sin token de plataforma",
+                       _channel_name(channel), business_id)
+        return
+    active = [c for c in contacts if c.get("enabled")]
+    if not active:
+        logger.warning("%s notification skipped for business %s: sin contactos activos",
+                       _channel_name(channel), business_id)
+        return
+    for contact in active:
+        dest = contact.get("destination")
+        if not dest:
+            continue
+        if channel == "whatsapp":
+            if document_url:
+                _safe_send(enviar_documento_whapi, token, dest,
+                           document_url, message)
+            else:
+                _safe_send(enviar_mensaje_whapi, token, dest, message)
+        else:
+            if document_url:
+                _safe_send(enviar_documento_telegram, token, dest,
+                           document_url, message)
+            else:
+                _safe_send(enviar_mensaje_telegram, token, dest, message)
+
+
 def notify_business(business_id, event_key, context):
     """Envía el evento al negocio por los canales habilitados. Nunca levanta.
 
     Soporta documentos: si context trae `document_url` (p. ej. la etiqueta en
     PDF de `shipment_ready`), se manda como documento con caption; si no, el
-    mensaje de texto renderizado (fallback).
+    mensaje de texto renderizado (fallback). El documento es una URL pública
+    que se reutiliza para todos los contactos (no se regenera por destino).
     """
     try:
         settings = load_notification_settings(business_id)
@@ -398,30 +529,13 @@ def notify_business(business_id, event_key, context):
     message = caption if document_url else render_message(event_key, context)
 
     if channels.get("whatsapp"):
-        phone = settings.get("whatsapp_phone")
-        if phone and TOKEN_WHAPI:
-            if document_url:
-                _safe_send(enviar_documento_whapi, TOKEN_WHAPI, phone, document_url, message)
-            else:
-                _safe_send(enviar_mensaje_whapi, TOKEN_WHAPI, phone, message)
-        else:
-            logger.warning(
-                "WhatsApp notification skipped for business %s: %s",
-                business_id,
-                "sin token de plataforma" if not TOKEN_WHAPI else "sin número destino")
-
+        _dispatch_contacts(business_id, "whatsapp",
+                           settings.get("whatsapp_contacts") or [],
+                           TOKEN_WHAPI, document_url, message)
     if channels.get("telegram"):
-        chat_id = settings.get("telegram_chat_id")
-        if chat_id and TELEGRAM_BOT_TOKEN:
-            if document_url:
-                _safe_send(enviar_documento_telegram, TELEGRAM_BOT_TOKEN, chat_id, document_url, message)
-            else:
-                _safe_send(enviar_mensaje_telegram, TELEGRAM_BOT_TOKEN, chat_id, message)
-        else:
-            logger.warning(
-                "Telegram notification skipped for business %s: %s",
-                business_id,
-                "sin token de plataforma" if not TELEGRAM_BOT_TOKEN else "sin chat id")
+        _dispatch_contacts(business_id, "telegram",
+                           settings.get("telegram_contacts") or [],
+                           TELEGRAM_BOT_TOKEN, document_url, message)
 
 
 # ─── Mensaje de prueba (POST /api/notifications/test) ─────────────────────────
@@ -437,13 +551,28 @@ class DestinationMissing(Exception):
 TEST_MESSAGE = "✅ Mensaje de prueba de Omnipanel: ¡tus notificaciones están funcionando!"
 
 
-def send_test_message(business_id, channel):
-    """Envía el mensaje de prueba por un canal. Levanta errores controlados."""
+def send_test_message(business_id, channel, contact=None):
+    """Envía el mensaje de prueba por un canal. Levanta errores controlados.
+
+    `contact` (opcional) es el contacto que se quiere probar
+    ({destination}); sin él se usa el primer contacto activo guardado.
+    """
     settings = load_notification_settings(business_id)
+    destination = None
+    if isinstance(contact, dict):
+        destination = contact.get("destination")
+        if destination is not None and not isinstance(destination, str):
+            raise ValueError("El destino del contacto debe ser texto")
     if channel == "whatsapp":
         if not TOKEN_WHAPI:
             raise ChannelUnavailable("WhatsApp")
-        phone = settings.get("whatsapp_phone")
+        phone = None
+        if destination is not None:
+            phone = _clean_destination(channel, destination)
+        else:
+            active = [c for c in (settings.get("whatsapp_contacts") or [])
+                      if c.get("enabled")]
+            phone = active[0].get("destination") if active else None
         if not phone:
             raise DestinationMissing("WhatsApp")
         enviar_mensaje_whapi(TOKEN_WHAPI, phone, TEST_MESSAGE)
@@ -451,7 +580,13 @@ def send_test_message(business_id, channel):
     if channel == "telegram":
         if not TELEGRAM_BOT_TOKEN:
             raise ChannelUnavailable("Telegram")
-        chat_id = settings.get("telegram_chat_id")
+        chat_id = None
+        if destination is not None:
+            chat_id = _clean_destination(channel, destination)
+        else:
+            active = [c for c in (settings.get("telegram_contacts") or [])
+                      if c.get("enabled")]
+            chat_id = active[0].get("destination") if active else None
         if not chat_id:
             raise DestinationMissing("Telegram")
         enviar_mensaje_telegram(TELEGRAM_BOT_TOKEN, chat_id, TEST_MESSAGE)

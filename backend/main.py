@@ -1,5 +1,6 @@
 import os
 import threading
+import uuid
 
 from flask import Flask, jsonify
 from werkzeug.exceptions import HTTPException
@@ -17,6 +18,7 @@ from app.api.platform_admin import platform_bp
 from app.api.publish_event import publications
 from app.api.support import support_bp
 from app.settings.config import CORS_ORIGIN
+from app.utils.logger import set_event_id
 from app.webhook.item_event import item_status
 from app.webhook.meli_dispatcher import meli
 from app.webhook.selling_event import sells
@@ -58,6 +60,28 @@ def create_app():
             pass
 
     threading.Thread(target=_warm_db_pool, daemon=True).start()
+
+    # Correlación de logs por request (Fase 1 observabilidad): cada request
+    # del dashboard REST recibe un id fresco (`req-...`) que queda estampado
+    # en todas sus líneas de log como [event=req-xxxx]. Las acciones que
+    # registran un evento de auditoría lo reemplazan por el id de esa fila
+    # (set_event_id en channels.py), así Cloud Logging se puede filtrar por
+    # [event=<id>]. Los webhooks manejan su propio id y no pasan por acá
+    # (ruta /webhooks/*).
+    @app.before_request
+    def _tag_api_request():
+        from flask import request as current_request
+
+        if current_request.path.startswith("/api/"):
+            set_event_id("req-" + uuid.uuid4().hex[:8])
+
+    @app.after_request
+    def _untag_api_request(resp):
+        # El contextvar vive por thread (gthread reutiliza threads entre
+        # requests): limpiarlo acá evita que un id viejo contamine el
+        # próximo request que toque el mismo thread.
+        set_event_id(None)
+        return resp
 
     @app.after_request
     def add_cors(resp):

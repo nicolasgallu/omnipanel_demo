@@ -176,13 +176,20 @@ let mockMeliCreds = {
 let mockTnCreds = { url: '', access_token: null as string | null, client_id: '29440' }
 
 // ── Notificaciones + Scrapfly (business-only, Configuración) ──
+// Seed para revisar estados: WhatsApp con Nico (activo) y Depósito
+// (silenciado), Telegram vacío. Los destinos terminados en "00" hacen
+// fallar el mensaje de prueba (mock del rechazo del proveedor).
 let mockNotifSettings = {
-  whatsapp_phone: null as string | null,
-  telegram_chat_id: null as string | null,
+  whatsapp_contacts: [
+    { id: 'wa-1', label: 'Nico', destination: '+54 9 11 2345 6789', enabled: true },
+    { id: 'wa-2', label: 'Depósito', destination: '+54 9 11 5555 0100', enabled: false },
+  ] as { id: string; label: string; destination: string; enabled: boolean }[],
+  telegram_contacts: [] as { id: string; label: string; destination: string; enabled: boolean }[],
   events: {
     order_confirmed: { whatsapp: true, telegram: true },
     order_cancelled: { whatsapp: true, telegram: true },
     order_delivered: { whatsapp: false, telegram: false },
+    shipment_ready: { whatsapp: true, telegram: true },
     scraping_finished: { whatsapp: false, telegram: true },
   },
 }
@@ -684,22 +691,40 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   }
   if (method === 'PUT' && path === '/api/notifications/settings') {
     await sleep(400)
-    const phone = typeof body.whatsapp_phone === 'string' ? body.whatsapp_phone.trim() || null : null
-    const chatId = typeof body.telegram_chat_id === 'string' ? body.telegram_chat_id.trim() || null : null
+    const wa = Array.isArray(body.whatsapp_contacts) ? body.whatsapp_contacts : mockNotifSettings.whatsapp_contacts
+    const tg = Array.isArray(body.telegram_contacts) ? body.telegram_contacts : mockNotifSettings.telegram_contacts
     const events = (body.events ?? mockNotifSettings.events) as typeof mockNotifSettings.events
-    mockNotifSettings = { whatsapp_phone: phone, telegram_chat_id: chatId, events }
+    mockNotifSettings = {
+      whatsapp_contacts: JSON.parse(JSON.stringify(wa)),
+      telegram_contacts: JSON.parse(JSON.stringify(tg)),
+      events: JSON.parse(JSON.stringify(events)),
+    }
     return send(200, { status: 'ok' })
   }
   if (method === 'POST' && path === '/api/notifications/test') {
-    await sleep(600)
+    await sleep(900)
     const channel = String(body.channel || '')
-    const dest = channel === 'whatsapp' ? mockNotifSettings.whatsapp_phone : mockNotifSettings.telegram_chat_id
+    const contact = (body.contact ?? {}) as { destination?: string }
+    let dest = typeof contact.destination === 'string' ? contact.destination.trim() : ''
+    if (!dest) {
+      const list = channel === 'whatsapp' ? mockNotifSettings.whatsapp_contacts : mockNotifSettings.telegram_contacts
+      dest = list.find((c) => c.enabled)?.destination ?? ''
+    }
     if (!dest) {
       return send(400, {
         error: 'missing_destination',
         message: channel === 'whatsapp'
-          ? 'Configurá tu número de WhatsApp antes de enviar una prueba'
-          : 'Configurá tu chat id de Telegram antes de enviar una prueba',
+          ? 'Configurá un contacto de WhatsApp antes de enviar una prueba'
+          : 'Configurá un contacto de Telegram antes de enviar una prueba',
+      })
+    }
+    // Mock: los destinos terminados en "00" simulan un rechazo del proveedor.
+    if (dest.replace(/\D/g, '').endsWith('00')) {
+      return send(502, {
+        error: 'send_failed',
+        message: channel === 'whatsapp'
+          ? 'WhatsApp rechazó el envío: el número no tiene una cuenta activa.'
+          : 'Telegram rechazó el envío: este chat todavía no le escribió al bot.',
       })
     }
     return send(200, { status: 'ok' })

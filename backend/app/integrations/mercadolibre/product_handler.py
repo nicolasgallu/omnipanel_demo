@@ -128,10 +128,17 @@ def _meli_request(method, url, token, json_body=None, params=None, timeout=15):
 
     attempts = 2 + 1 if method in RETRYABLE_METHODS else 1
     for attempt in range(attempts):
+        started = time.monotonic()
         response = requests.request(
             method, url, headers=headers, json=json_body, params=params, timeout=timeout
         )
         if attempt == attempts - 1 or response.status_code not in RETRY_STATUSES:
+            # Fase 3: una línea por llamada HTTP a Meli (método, URL, status,
+            # intento y duración) -> un publish "frizado" muestra acá qué
+            # llamada se colgó.
+            logger.info("meli_http %s %s -> %s (attempt=%d, %.0fms)",
+                        method, url, response.status_code, attempt + 1,
+                        (time.monotonic() - started) * 1000)
             return response
         delay = 2 ** attempt  # 1s, then 2s
         if response.status_code == 429:
@@ -523,6 +530,25 @@ def publish(payload):
     item_format = _aux_product_format(item_data)
     product_listing_id = item_data['product_listing_id']
 
+    # Fase 2 (payload-of-record): qué se manda a Meli, visible en Cloud
+    # Logging sin adivinar — modo catálogo/tradicional, ficha, GTIN,
+    # categoría, tipo de publicación, fotos, precio y stock.
+    logger.info(
+        "Publish payload for product %s: mode=%s catalog_product_id=%s"
+        " catalog_listing=%s gtin=%s category=%s listing_type=%s"
+        " pictures=%d price=%s stock=%s",
+        product_id,
+        "catalog" if item_format.get("catalog_listing") else "traditional",
+        item_format.get("catalog_product_id"),
+        item_format.get("catalog_listing"),
+        item_data.get("gtin"),
+        item_format.get("category_id"),
+        item_format.get("listing_type_id"),
+        len(item_format.get("pictures") or []),
+        item_format.get("price"),
+        item_format.get("available_quantity"),
+    )
+
     # Validación previa: bloquear acá (mensaje claro) en vez de mandar el POST
     # y recibir el rechazo confuso de Meli mezclando warnings con errores.
     missing = _missing_required_attributes(item_data)
@@ -538,16 +564,22 @@ def publish(payload):
         }, PRODUCT_LISTING_TABLE)
         return None
 
+    step_start = time.monotonic()
     response = requests.post("https://api.mercadolibre.com/items", 
                     json=item_format,
                     headers={"Authorization": f"Bearer {token}"},
                     timeout=30)
+    logger.info("step=post_items status=%s duration=%.0fms",
+                response.status_code, (time.monotonic() - step_start) * 1000)
     if response.status_code < 300:
         logger.info("Publishing Item Done Succesfully.")
         body_json = response.json() or {}
         meli_id = body_json.get('id')
         permalink = body_json.get('permalink')
+        step_start = time.monotonic()
         _set_description(meli_id, item_data["description"], token)
+        logger.info("step=set_description duration=%.0fms",
+                    (time.monotonic() - step_start) * 1000)
         
         data = {
         'meli_id': meli_id, 

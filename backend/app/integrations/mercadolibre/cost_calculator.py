@@ -1,5 +1,7 @@
 # app/integrations/mercadolibre/cost_calculator.py
 import json
+import time
+
 import requests
 from sqlalchemy import text
 
@@ -49,12 +51,15 @@ def _without_none(params):
 
 def _meli_get(path, token, params=None):
     """GET con bearer token; lanza excepción ante errores HTTP."""
+    started = time.monotonic()
     response = requests.get(
         MELI_API + path,
         params=params or {},
         headers={"Authorization": f"Bearer {token}"},
         timeout=15,
     )
+    logger.info("meli_cost_get %s -> %s (%.0fms)", path, response.status_code,
+                (time.monotonic() - started) * 1000)
     response.raise_for_status()
     return response.json()
 

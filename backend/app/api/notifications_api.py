@@ -1,8 +1,11 @@
 """REST API de notificaciones (business-only).
 
-- GET  /api/notifications/settings -> canales destino + eventos habilitados
-- PUT  /api/notifications/settings -> guarda el objeto completo (reemplazo)
-- POST /api/notifications/test     -> mensaje de prueba por un canal
+- GET  /api/notifications/settings -> contactos por canal (máx. 10 de
+  WhatsApp y 10 de Telegram, cada uno {id, label, destination, enabled})
+  + eventos habilitados. Sin campos legacy.
+- PUT  /api/notifications/settings -> guarda el objeto completo (reemplazo).
+- POST /api/notifications/test     -> mensaje de prueba por un canal; con
+  `contact` opcional ({destination}) para probar un contacto concreto.
 
 Las preferencias viven en businesses.config -> notifications (mismo patrón
 que stock_sync / logo_url). Los tokens de los canales (Whapi / Telegram) son
@@ -62,7 +65,11 @@ def test_notification():
                         "message": "El canal debe ser whatsapp o telegram"}), 400
 
     try:
-        send_test_message(current_business_id(), channel)
+        send_test_message(current_business_id(), channel,
+                          data.get("contact"))
+    except ValueError as exc:
+        # Destino/contacto inválido -> error de validación legible (400).
+        return jsonify({"error": "bad_request", "message": str(exc)}), 400
     except DestinationMissing:
         return jsonify({"error": "missing_destination",
                         "message": DESTINATION_MESSAGES[channel]}), 400

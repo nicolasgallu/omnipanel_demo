@@ -42,7 +42,7 @@ from app.integrations.mercadolibre.product_handler import _meli_request, _settin
 from app.integrations.tiendanube.product_handler import create_categories
 from app.pipelines.publish import pipeline_publish
 from app.settings.config import SCHEMA_ACCOUNTS
-from app.utils.logger import logger
+from app.utils.logger import logger, set_event_id
 
 channels_bp = Blueprint("channels_api", __name__, url_prefix="/api")
 
@@ -476,15 +476,30 @@ def _ml_action(event_type, data):
 
     payload = {"product_id": product_id, "account_id": account_id,
                "target": "mercadolibre", "event_type": event_type}
+    # Payload-of-record: la config completa (modo catálogo, ficha elegida,
+    # atributos, etc.) queda en la fila de auditoría para reconstruir cada
+    # click sin depender de los logs.
+    if isinstance(data.get("config"), dict):
+        payload["config"] = data["config"]
+    start = time.monotonic()
+    outcome = "ok"
     event_id = _record_dashboard_event(account_id, event_type, product_id, payload)
+    # Fase 1: todas las líneas de este request quedan etiquetadas con el id
+    # de la fila de auditoría -> grep por [event=<id>] en Cloud Logging.
+    if event_id:
+        set_event_id(event_id)
     try:
         pipeline_publish(payload)
         if event_id:
             finish(event_id)
     except Exception as exc:
+        outcome = "error"
         if event_id:
             fail(event_id)
         logger.exception("ML %s failed for product %s", event_type, product_id)
+        logger.info("action=%s product=%s target=mercadolibre outcome=error"
+                    " duration=%.2fs", event_type, product_id,
+                    time.monotonic() - start)
         return jsonify({"error": "meli_error", "message": str(exc)}), 502
 
     # Tras publicar/actualizar/pausar, sincronizar el estado REAL del item una
@@ -519,6 +534,11 @@ def _ml_action(event_type, data):
             " catalog_product_id, marketplace_item_id, marketplace_status"
             " FROM " + ML_LISTINGS_TABLE + " WHERE product_id = :p",
             {"p": product_id})
+        logger.info(
+            "action=%s product=%s target=mercadolibre outcome=%s"
+            " db_status=%s meli_status=%s duration=%.2fs",
+            event_type, product_id, outcome,
+            listing.get("status"), meli_status, time.monotonic() - start)
         return jsonify({
             "status": ml_status_from_db(listing.get("status"), listing.get("reason")),
             "external_id": listing.get("meli_id"),
@@ -537,6 +557,11 @@ def _ml_action(event_type, data):
             "sub_status": sub_status,
         })
     except LookupError:
+        logger.info(
+            "action=%s product=%s target=mercadolibre outcome=%s"
+            " db_status=None meli_status=%s duration=%.2fs",
+            event_type, product_id, outcome, meli_status,
+            time.monotonic() - start)
         return jsonify({"status": "unpublished", "external_id": None,
                         "db_status": None, "reason": None, "remedy": None,
                         "permalink": None,
@@ -915,6 +940,8 @@ def ml_catalog_optin():
                "target": "mercadolibre", "event_type": "catalog_optin",
                "catalog_product_id": catalog_product_id}
     event_id = _record_dashboard_event(account_id, "catalog_optin", product_id, payload)
+    if event_id:
+        set_event_id(event_id)
 
     try:
         resp = _meli_request(
@@ -925,12 +952,17 @@ def ml_catalog_optin():
     except Exception as exc:
         if event_id:
             fail(event_id)
+        logger.info("action=catalog_optin product=%s target=mercadolibre"
+                    " outcome=error", product_id)
         return _meli_error(exc)
 
     if resp.status_code >= 300:
         if event_id:
             fail(event_id)
         logger.error("Catalog optin rejected (raw): %s", resp.text[:3000])
+        logger.info("action=catalog_optin product=%s target=mercadolibre"
+                    " outcome=rejected status=%s", product_id,
+                    resp.status_code)
         return jsonify({"error": "catalog_optin_failed",
                         "message": _catalog_optin_error(resp)}), 502
 
@@ -975,6 +1007,8 @@ def ml_catalog_optin():
         finish(event_id)
     logger.info("Catalog optin done: %s -> %s (%s)",
                 meli_id, new_meli_id, catalog_product_id)
+    logger.info("action=catalog_optin product=%s target=mercadolibre"
+                " outcome=ok", product_id)
     return jsonify({"status": "ok", "external_id": str(new_meli_id),
                     "catalog_product_id": catalog_product_id,
                     "marketplace_item_id": str(meli_id)})
@@ -1016,6 +1050,8 @@ def ml_catalog_optout():
     payload = {"product_id": product_id, "account_id": account_id,
                "target": "mercadolibre", "event_type": "catalog_optout"}
     event_id = _record_dashboard_event(account_id, "catalog_optout", product_id, payload)
+    if event_id:
+        set_event_id(event_id)
 
     # 1) Cerrar la publicación de catálogo.
     try:
@@ -1024,11 +1060,16 @@ def ml_catalog_optout():
     except Exception as exc:
         if event_id:
             fail(event_id)
+        logger.info("action=catalog_optout product=%s target=mercadolibre"
+                    " outcome=error", product_id)
         return _meli_error(exc)
     if resp.status_code not in (200, 404):
         if event_id:
             fail(event_id)
         logger.error("Catalog optout rejected (raw): %s", resp.text[:3000])
+        logger.info("action=catalog_optout product=%s target=mercadolibre"
+                    " outcome=rejected status=%s", product_id,
+                    resp.status_code)
         return jsonify({"error": "catalog_optout_failed",
                         "message": _meli_response_error(resp)}), 502
 
@@ -1066,6 +1107,8 @@ def ml_catalog_optout():
     if event_id:
         finish(event_id)
     logger.info("Catalog optout done: %s back to %s", meli_id, shadow)
+    logger.info("action=catalog_optout product=%s target=mercadolibre"
+                " outcome=ok", product_id)
     return jsonify({"status": "ok", "external_id": str(shadow)})
 
 
@@ -1368,22 +1411,36 @@ def tn_publish():
 
     payload = {"product_id": product_id, "account_id": account_id,
                "target": "tiendanube", "event_type": "publish"}
+    # Payload-of-record: config completa en la fila de auditoría.
+    if isinstance(config, dict):
+        payload["config"] = config
+    start = time.monotonic()
+    outcome = "ok"
     event_id = _record_dashboard_event(account_id, "publish", product_id, payload)
+    if event_id:
+        set_event_id(event_id)
     try:
         create_categories(payload)
         pipeline_publish(payload)
         if event_id:
             finish(event_id)
     except Exception as exc:
+        outcome = "error"
         if event_id:
             fail(event_id)
         logger.exception("TN publish failed for product %s", product_id)
+        logger.info("action=publish product=%s target=tiendanube"
+                    " outcome=error duration=%.2fs", product_id,
+                    time.monotonic() - start)
         return jsonify({"error": "tiendanube_error", "message": str(exc)}), 502
 
     listing = get_one(
         "SELECT tnube_id, status, reason, remedy, permalink FROM "
         + TN_LISTINGS_TABLE + " WHERE product_id = :p",
         {"p": product_id})
+    logger.info("action=publish product=%s target=tiendanube outcome=%s"
+                " db_status=%s duration=%.2fs", product_id, outcome,
+                listing.get("status"), time.monotonic() - start)
     return jsonify({
         "status": tn_status_from_db(listing.get("status"), listing.get("reason")),
         "external_id": listing.get("tnube_id"),
@@ -1409,15 +1466,23 @@ def _tn_action(event_type, data):
 
     payload = {"product_id": product_id, "account_id": account_id,
                "target": "tiendanube", "event_type": event_type}
+    start = time.monotonic()
+    outcome = "ok"
     event_id = _record_dashboard_event(account_id, event_type, product_id, payload)
+    if event_id:
+        set_event_id(event_id)
     try:
         pipeline_publish(payload)
         if event_id:
             finish(event_id)
     except Exception as exc:
+        outcome = "error"
         if event_id:
             fail(event_id)
         logger.exception("TN %s failed for product %s", event_type, product_id)
+        logger.info("action=%s product=%s target=tiendanube outcome=error"
+                    " duration=%.2fs", event_type, product_id,
+                    time.monotonic() - start)
         return jsonify({"error": "tiendanube_error", "message": str(exc)}), 502
 
     try:
@@ -1425,6 +1490,10 @@ def _tn_action(event_type, data):
             "SELECT tnube_id, status, reason, remedy, permalink FROM "
             + TN_LISTINGS_TABLE + " WHERE product_id = :p",
             {"p": product_id})
+        logger.info("action=%s product=%s target=tiendanube outcome=%s"
+                    " db_status=%s duration=%.2fs", event_type, product_id,
+                    outcome, listing.get("status"),
+                    time.monotonic() - start)
         return jsonify({
             "status": tn_status_from_db(listing.get("status"), listing.get("reason")),
             "external_id": listing.get("tnube_id"),
