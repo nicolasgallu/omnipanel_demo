@@ -56,6 +56,55 @@ const SECTION_LABELS: Record<SectionKey, string> = {
   listing: 'Publicación',
 }
 
+// ─── Envío ML: traducciones de los códigos que manda Meli ───────────────────
+// Meli manda los valores en inglés (códigos). Acá se muestran en español, pero
+// el valor guardado/enviado SIEMPRE es el código original (sin tocar backend).
+const SHIPPING_ITEM_LABEL: Record<string, string> = {
+  MODE: 'Método de envío',
+  LOGISTIC_TYPE: 'Tipo de logística',
+  LOCAL_PICK_UP: 'Buscar en local',
+  FREE_SHIPPING: 'Envío gratis',
+}
+
+const SHIPPING_MODE_LABEL: Record<string, string> = {
+  me2: 'Mercado Envíos',
+  me1: 'Mercado Envíos',
+  custom: 'Envío a convenir',
+  not_specified: 'Sin especificar',
+}
+
+const LOGISTIC_TYPE_LABEL: Record<string, string> = {
+  fulfillment: 'Full',
+  cross_docking: 'Cross docking',
+  self_service: 'Flex',
+  drop_off: 'Punto de despacho',
+  custom: 'A convenir',
+}
+
+// MODE trae me1 y me2 (ambos "Mercado Envíos"): se unifican en me2 (el
+// vigente) para que el dropdown muestre una sola opción.
+function dedupeModes(codes: string[]): string[] {
+  const out: string[] = []
+  for (const c of codes) {
+    const canonical = c === 'me1' ? 'me2' : c
+    if (!out.includes(canonical)) out.push(canonical)
+  }
+  return out
+}
+
+// Valor legible para el resumen de la vista "Publicado": "Sí"/"No" para los
+// booleanos y etiqueta en español para los códigos; el resto pasa tal cual.
+function shippingSummaryValue(id: string, raw: unknown): string {
+  const v = raw === undefined || raw === null || String(raw).trim() === '' ? '' : String(raw)
+  if (!v) return '—'
+  if (id === 'FREE_SHIPPING' || id === 'LOCAL_PICK_UP') {
+    return BOOLEAN_TRUE.has(v) ? 'Sí' : 'No'
+  }
+  if (id === 'MODE') return SHIPPING_MODE_LABEL[v] ?? v
+  if (id === 'LOGISTIC_TYPE') return LOGISTIC_TYPE_LABEL[v] ?? v
+  return v
+}
+
 function sectionItems(settings: MLSettings | null, section: SectionKey): MLSettingsItem[] {
   if (!settings || !Array.isArray(settings.settings)) return []
   const out: MLSettingsItem[] = []
@@ -600,7 +649,10 @@ export function MLChannelPanel({
     ...(['attributes', 'shipping', 'sale_terms'] as const).flatMap((section) =>
       sectionItems(settings, section)
         .filter((i) => i.id !== 'LISTING_TYPE')
-        .map((i) => ({ label: i.name || i.id, value: mlCfg.values[i.id] || '—' })),
+        .map((i) => ({
+          label: SHIPPING_ITEM_LABEL[i.id] ?? (i.name || i.id),
+          value: shippingSummaryValue(i.id, mlCfg.values[i.id]),
+        })),
     ),
   ]
 
@@ -1101,6 +1153,8 @@ function MLCategoryStep({
 
 // ─── Step 2: attributes + shipping + warranty + campaign (no bottom CTA) ─────
 
+// Espejo de app/integrations/core/bools.is_truthy (fuente única del backend):
+// no agregar variantes acá sin actualizar esa función.
 const BOOLEAN_TRUE = new Set(['True', 'Si', 'Sí', 'true', 'si', 'sí', 'yes', '1', 'on'])
 
 function AttributeCard({
@@ -1112,7 +1166,7 @@ function AttributeCard({
   value: string
   onChange: (v: string) => void
 }) {
-  const label = item.name || item.id
+  const label = SHIPPING_ITEM_LABEL[item.id] ?? (item.name || item.id)
   const options = optionsOf(item)
   const vt = item.value_type
   const empty = !String(value || '').trim()
@@ -1122,6 +1176,32 @@ function AttributeCard({
   const optionalMark = item.catalog_required && !item.required && empty ? (
     <span style={{ color: '#2563EB' }}> · para catálogo</span>
   ) : null
+
+  // Envío: los booleanos de Meli (True/False) se muestran como toggle.
+  if (item.id === 'LOCAL_PICK_UP' || item.id === 'FREE_SHIPPING') {
+    const on = BOOLEAN_TRUE.has(value)
+    return (
+      <div className="flex items-center justify-between px-3 py-2.5 rounded-xl" style={{ background: 'white', border: '1px solid #E2E8F0' }}>
+        <span style={{ fontSize: '10px', color: '#94A3B8' }}>{label}</span>
+        <Toggle value={on} onChange={(v) => onChange(v ? 'True' : 'False')} />
+      </div>
+    )
+  }
+
+  // Envío: MODE y LOGISTIC_TYPE muestran los códigos de Meli traducidos.
+  if (item.id === 'MODE' || item.id === 'LOGISTIC_TYPE') {
+    return (
+      <ShippingSelect
+        label={label}
+        value={value}
+        codes={item.id === 'MODE' ? dedupeModes(optionsOf(item)) : optionsOf(item)}
+        labelOf={(code) =>
+          (item.id === 'MODE' ? SHIPPING_MODE_LABEL : LOGISTIC_TYPE_LABEL)[code] ?? code
+        }
+        onChange={onChange}
+      />
+    )
+  }
 
   if (vt === 'boolean') {
     // Meli manda value_examples como ["No","Sí"] (o en otro orden). La
@@ -1175,6 +1255,66 @@ function AttributeCard({
         placeholder="—"
         className="text-xs font-semibold text-right outline-none bg-transparent flex-1 min-w-0 text-ink"
       />
+    </div>
+  )
+}
+
+function ShippingSelect({
+  label,
+  value,
+  codes,
+  labelOf,
+  onChange,
+}: {
+  label: string
+  value: string
+  codes: string[]
+  labelOf: (code: string) => string
+  onChange: (v: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const empty = !String(value || '').trim()
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-left transition-all"
+        style={{ background: open ? '#EEF2FF' : 'white', border: `1px solid ${open ? '#C7D2FE' : '#E2E8F0'}` }}
+      >
+        <span style={{ fontSize: '10px', color: '#94A3B8' }}>{label}</span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span
+            className="text-xs font-semibold truncate"
+            style={{ color: empty ? '#94A3B8' : '#0A1628', fontWeight: empty ? 400 : 600 }}
+          >
+            {empty ? 'Elegí…' : labelOf(value)}
+          </span>
+          <Chevron open={open} />
+        </div>
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div
+            className="absolute right-0 mt-1 z-20 rounded-xl p-1.5 flex flex-col gap-0.5 min-w-full max-h-48 overflow-y-auto scroll-slim"
+            style={{ background: 'white', border: '1px solid #E2E8F0', boxShadow: '0 4px 16px rgba(0,0,0,0.08)' }}
+          >
+            {codes.map((code) => (
+              <button
+                key={code}
+                onClick={() => {
+                  onChange(code)
+                  setOpen(false)
+                }}
+                className="text-left px-3 py-1.5 rounded-lg text-xs transition-all hover:bg-slate-50 whitespace-nowrap"
+                style={{ color: code === value ? '#4F46E5' : '#0A1628', fontWeight: code === value ? 600 : 400 }}
+              >
+                {labelOf(code)}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }

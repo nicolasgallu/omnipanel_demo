@@ -104,7 +104,7 @@ export function AppShell() {
     <div className="flex h-screen overflow-hidden bg-canvas">
       <aside className="w-52 flex flex-col flex-shrink-0 bg-white" style={{ borderRight: '1px solid #E2E8F0' }}>
         <div className="flex items-center gap-2.5 px-5 py-5" style={{ borderBottom: '1px solid #F1F5F9' }}>
-          <Logo />
+          <Logo variant="ngo" size={42} />
         </div>
 
         <nav className="flex flex-col gap-0.5 px-3 py-4 flex-1 overflow-y-auto scroll-slim" aria-label="Principal">

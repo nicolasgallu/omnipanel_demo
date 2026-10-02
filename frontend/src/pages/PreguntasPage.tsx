@@ -560,10 +560,15 @@ function ConversationDetail({
   const failed = data.replies.find((x) => x.status === 'failed') ?? null
   const thread = data.replies.filter((x) => x.status !== 'draft')
   const closed = m.reply_status === 'closed'
-  const locked = closed || !!m.answered_externally
+  // Bloqueado (solo lectura) también cuando ya está respondida: el backend
+  // rechaza (409) cualquier reply sobre `answered`, así que el compositor no
+  // debe quedar abierto (mostraba "Solo lectura" a destiempo tras reintentar).
+  const locked = closed || m.reply_status === 'answered'
   const lockMsg = closed
     ? (m.closed_reason ?? 'La conversación está cerrada en MercadoLibre.') + ' Ya no se puede responder.'
-    : 'Esta pregunta ya se respondió desde MercadoLibre. Para cambiar la respuesta, entrá a tu cuenta de MercadoLibre.'
+    : m.answered_externally
+      ? 'Esta pregunta ya se respondió desde MercadoLibre. Para cambiar la respuesta, entrá a tu cuenta de MercadoLibre.'
+      : 'Esta conversación ya fue respondida. Para cambiarla, entrá a tu cuenta de MercadoLibre.'
   const showSuggestion =
     !locked && m.reply_status !== 'answered' &&
     (draft || aiError || regenerating || (config.mode !== 'off' && m.reply_status !== 'needs_review'))

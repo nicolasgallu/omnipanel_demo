@@ -40,9 +40,16 @@ from app.db.claims import claim, finish, fail
 from app.db.engine import engine
 from app.db.helpers import execute, get_all, get_one, insert_and_get_id, stream_rows
 from app.integrations.core.credentials import get_access_token
+from app.integrations.core.bools import is_truthy
 from app.integrations.mercadolibre.product_handler import _meli_request, _settings_builder
 from app.integrations.mercadolibre.size_grid import grid_required
-from app.integrations.tiendanube.product_handler import create_categories
+from app.integrations.tiendanube.product_handler import (
+    TN_AGE_GROUP_OPTIONS,
+    TN_GENDER_OPTIONS,
+    create_categories,
+    normalize_tn_age_group,
+    normalize_tn_gender,
+)
 from app.pipelines.publish import pipeline_publish
 from app.settings.config import SCHEMA_ACCOUNTS
 from app.utils.logger import logger, set_event_id
@@ -723,9 +730,10 @@ def ml_publish():
 
 
 def _to_bool_str(value, true_label="True", false_label="False"):
+    # Fuente única de "verdadero": app/integrations/core/bools.is_truthy.
     if value is None:
         return None
-    return true_label if value in (True, "True", "true", 1, "1", "Si") else false_label
+    return true_label if is_truthy(value) else false_label
 
 
 @channels_bp.route("/mercadolibre/price", methods=["PATCH"])
@@ -1430,7 +1438,18 @@ def tn_settings_get():
         settings = {}
     merged = dict(TN_DEFAULT_SETTINGS)
     merged.update(settings)
-    return jsonify({"settings": merged})
+    # Normaliza alias viejos de género/edad a su label canónico (los alias se
+    # siguen aceptando al guardar, pero la UI muestra siempre el canónico).
+    for key, normalizer in (("GENDER", normalize_tn_gender),
+                            ("AGE_GROUP", normalize_tn_age_group)):
+        entry = merged.get(key)
+        if isinstance(entry, dict) and entry.get("USER_INPUT_VALUE"):
+            entry["USER_INPUT_VALUE"] = normalizer(entry["USER_INPUT_VALUE"])
+    return jsonify({
+        "settings": merged,
+        "gender_options": TN_GENDER_OPTIONS,
+        "age_group_options": TN_AGE_GROUP_OPTIONS,
+    })
 
 
 def _apply_tn_config(listing, config):
@@ -2197,16 +2216,30 @@ def _shipment_payload(raw):
     return {}
 
 
+# Filtros del listado de envíos (valores de Meli). `logistic_type` vive dentro
+# del JSON `data` (no es columna), por eso el WHERE lo extrae con JSON_EXTRACT.
+SHIPMENT_STATUS_FILTERS = (
+    "pending", "handling", "ready_to_ship", "shipped",
+    "delivered", "not_delivered", "cancelled",
+)
+SHIPMENT_LOGISTIC_FILTERS = ("cross_docking", "drop_off", "fulfillment", "self_service")
+
+
 @channels_bp.route("/mercadolibre/shipments", methods=["GET"])
 @require_auth
 def ml_shipments():
     """Lista los envíos del business (proyección mercadolibre.shipments) con
-    paginación y búsqueda server-side.
+    paginación, búsqueda y filtros server-side.
 
-    Query: q (búsqueda por envío/orden/contenido del JSON), page (1-based),
-    page_size (default 50, máx 200). Responde {items, total, page, page_size,
-    summary{total,pending,on_way,delivered,issues}} — el summary cubre TODA la
-    búsqueda (no solo la página) para el strip de métricas.
+    Query: q (búsqueda por envío/orden/contenido del JSON), status
+    (pending|handling|ready_to_ship|shipped|delivered|not_delivered|cancelled),
+    logistic_type (cross_docking|drop_off|fulfillment|self_service — filtrar
+    por cross_docking incluye también xd_drop_off), page (1-based), page_size
+    (default 50, máx 200). Responde {items, total, page, page_size,
+    counts{total,to_prepare,in_transit,delivered,incidents}}:
+    - `total` = con filtros aplicados (para paginar).
+    - `counts` = con la búsqueda pero SIN los filtros de estado/tipo
+      (el strip de métricas respeta la búsqueda, no los filtros).
     """
     accounts = get_all(
         "SELECT id FROM " + ACCOUNTS_TABLE
@@ -2214,10 +2247,12 @@ def ml_shipments():
         {"b": current_business_id()})
     if not accounts:
         return jsonify({"items": [], "total": 0, "page": 1, "page_size": 50,
-                        "summary": {"pending": 0, "on_way": 0,
-                                    "delivered": 0, "issues": 0}})
+                        "counts": {"total": 0, "to_prepare": 0, "in_transit": 0,
+                                   "delivered": 0, "incidents": 0}})
 
     q = (request.args.get("q") or "").strip()
+    status_arg = (request.args.get("status") or "").strip()
+    logistic_arg = (request.args.get("logistic_type") or "").strip()
     try:
         page = max(1, int(request.args.get("page") or 1))
     except ValueError:
@@ -2229,31 +2264,51 @@ def ml_shipments():
 
     ids = [a["id"] for a in accounts]
     placeholders = ",".join(":id%d" % i for i in range(len(ids)))
-    params = {"id%d" % i: ids[i] for i in range(len(ids))}
-    where = " WHERE account_id IN (" + placeholders + ")"
+    base_params = {"id%d" % i: ids[i] for i in range(len(ids))}
+    base_where = " WHERE account_id IN (" + placeholders + ")"
     if q:
         like_q = "%" + q + "%"
-        where += (" AND (external_id LIKE :like_q OR order_id LIKE :like_q"
-                  " OR CAST(data AS CHAR) LIKE :like_q)")
-        params["like_q"] = like_q
+        base_where += (" AND (external_id LIKE :like_q OR order_id LIKE :like_q"
+                       " OR CAST(data AS CHAR) LIKE :like_q)")
+        base_params["like_q"] = like_q
+
+    # Filtros: afectan la lista y el `total`, NO las métricas `counts`.
+    filter_params = dict(base_params)
+    filtered_where = base_where
+    if status_arg in SHIPMENT_STATUS_FILTERS:
+        filtered_where += " AND status = :status"
+        filter_params["status"] = status_arg
+    if logistic_arg in SHIPMENT_LOGISTIC_FILTERS:
+        if logistic_arg == "cross_docking":
+            # xd_drop_off es la variante de cross docking: se agrupa con él.
+            filtered_where += (
+                " AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.logistic_type'))"
+                " IN ('cross_docking', 'xd_drop_off')")
+        else:
+            filtered_where += (
+                " AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.logistic_type'))"
+                " = :logistic_type")
+            filter_params["logistic_type"] = logistic_arg
 
     total_row = get_one(
-        "SELECT COUNT(*) AS n FROM " + SHIPMENTS_TABLE + where, params)
+        "SELECT COUNT(*) AS n FROM " + SHIPMENTS_TABLE + filtered_where,
+        filter_params)
     total = int(total_row["n"])
 
-    summary = get_one(
+    counts = get_one(
         "SELECT"
-        " SUM(CASE WHEN status IN ('pending','handling') THEN 1 ELSE 0 END) AS pending,"
-        " SUM(CASE WHEN status IN ('ready_to_ship','shipped') THEN 1 ELSE 0 END) AS on_way,"
+        " COUNT(*) AS total,"
+        " SUM(CASE WHEN status IN ('pending','handling') THEN 1 ELSE 0 END) AS to_prepare,"
+        " SUM(CASE WHEN status IN ('ready_to_ship','shipped') THEN 1 ELSE 0 END) AS in_transit,"
         " SUM(CASE WHEN status = 'delivered' THEN 1 ELSE 0 END) AS delivered,"
-        " SUM(CASE WHEN status IN ('not_delivered','cancelled') THEN 1 ELSE 0 END) AS issues"
-        + " FROM " + SHIPMENTS_TABLE + where, params)
+        " SUM(CASE WHEN status IN ('not_delivered','cancelled') THEN 1 ELSE 0 END) AS incidents"
+        + " FROM " + SHIPMENTS_TABLE + base_where, base_params)
 
     rows = get_all(
         "SELECT external_id, order_id, status, data, updated_at"
-        + " FROM " + SHIPMENTS_TABLE + where
+        + " FROM " + SHIPMENTS_TABLE + filtered_where
         + " ORDER BY updated_at DESC, id DESC LIMIT :limit OFFSET :offset",
-        dict(params, limit=page_size, offset=(page - 1) * page_size))
+        dict(filter_params, limit=page_size, offset=(page - 1) * page_size))
 
     items = []
     for r in rows:
@@ -2275,7 +2330,7 @@ def ml_shipments():
         "total": total,
         "page": page,
         "page_size": page_size,
-        "summary": {k: int(v or 0) for k, v in summary.items()},
+        "counts": {k: int(v or 0) for k, v in counts.items()},
     })
 
 

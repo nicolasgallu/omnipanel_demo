@@ -34,6 +34,26 @@ TN_GENDER_MAP = {
     "Infantil": "unisex",      # compat con valores viejos
 }
 
+# Labels canónicos expuestos al front (el dropdown los arma desde acá).
+TN_GENDER_OPTIONS = ["Mujer", "Hombre", "Unisex"]
+TN_AGE_GROUP_OPTIONS = ["Adultos", "Niños", "Bebés", "Recién nacido"]
+
+# Alias viejos -> label canónico (para normalizar datos guardados al leerlos).
+_TN_GENDER_CANONICAL = {"Infantil": "Unisex"}
+_TN_AGE_CANONICAL = {"Adolescentes": "Adultos"}
+
+
+def normalize_tn_gender(value):
+    if value is None:
+        return None
+    return _TN_GENDER_CANONICAL.get(value, value)
+
+
+def normalize_tn_age_group(value):
+    if value is None:
+        return None
+    return _TN_AGE_CANONICAL.get(value, value)
+
 
 def _tn_enum(value, mapping):
     """Label español (o ya en inglés) -> enum válido de Tienda Nube; None si

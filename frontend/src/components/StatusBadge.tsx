@@ -1,17 +1,19 @@
 import type { ReactNode } from 'react'
 import type { ChannelStatus } from '../lib/api/types'
+import { statusLabel, useChannelStatuses } from '../lib/channelStatus'
 
-// 1:1 copy of the Figma STATUS map.
+// Presentación (color/fondo/ícono) por estado. La ETIQUETA viene del backend
+// (lib/channelStatus.ts): una sola fuente para el nombre visible.
 export const STATUS: Record<
   ChannelStatus,
-  { label: string; color: string; bg: string }
+  { color: string; bg: string }
 > = {
-  unpublished: { label: 'Sin publicar', color: '#94A3B8', bg: '#F1F5F9' },
-  prepublished: { label: 'Pre-publicado', color: '#D97706', bg: '#FEF3C7' },
-  under_review: { label: 'En revisión', color: '#2563EB', bg: '#EFF6FF' },
-  published: { label: 'Publicado', color: '#16A34A', bg: '#DCFCE7' },
-  paused: { label: 'Pausado', color: '#EA580C', bg: '#FFF7ED' },
-  failed: { label: 'Sin publicar', color: '#94A3B8', bg: '#F1F5F9' },
+  unpublished: { color: '#94A3B8', bg: '#F1F5F9' },
+  prepublished: { color: '#D97706', bg: '#FEF3C7' },
+  under_review: { color: '#2563EB', bg: '#EFF6FF' },
+  published: { color: '#16A34A', bg: '#DCFCE7' },
+  paused: { color: '#EA580C', bg: '#FFF7ED' },
+  failed: { color: '#94A3B8', bg: '#F1F5F9' },
 }
 
 // Small glyph per status (Figma STATUS_ICON, 12px viewBox).
@@ -48,6 +50,8 @@ export function StatusBadge({
   variant?: 'soft' | 'chip'
 }) {
   const s = STATUS[status]
+  const label = statusLabel(status)
+  useChannelStatuses()
 
   if (variant === 'chip') {
     // Figma Concept 1 — tinted icon tile + label (used in the listing tables).
@@ -62,7 +66,7 @@ export function StatusBadge({
           </svg>
         </span>
         <span className="text-xs font-medium" style={{ color: '#334155' }}>
-          {s.label}
+          {label}
         </span>
       </span>
     )
@@ -74,7 +78,7 @@ export function StatusBadge({
       style={{ color: s.color, background: s.bg }}
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: s.color }} />
-      {s.label}
+      {label}
     </span>
   )
 }

@@ -7,6 +7,7 @@ import type {
   CatalogEligibility,
   CatalogProduct,
   ChannelActionResult,
+  ChannelStatus,
   Employee,
   InventoryQuery,
   ImsSettingsInfo,
@@ -79,6 +80,9 @@ export const inventoryApi = {
   }) => apiBlob(`/api/inventory/products/export.csv${queryString(params)}`),
 
   get: (id: number) => api<ProductDetail>(`/api/inventory/products/${id}`),
+
+  channelStatuses: () =>
+    api<{ statuses: { value: ChannelStatus; label: string }[] }>('/api/inventory/channel-statuses'),
 
   patch: (id: number, body: { title?: string; description?: string; brand?: string; model?: string; price?: number; dimensions_cm_g?: object }) =>
     api<{ product: Product }>(`/api/inventory/products/${id}`, {
@@ -322,7 +326,7 @@ export const channelsApi = {
   tnExportCsv: (params: { columns: string; limit: number; q?: string; status?: string; category?: string }) =>
     apiBlob(`/api/tiendanube/listings/export.csv${queryString(params)}`),
 
-  mlShipments: (params?: { page?: number; page_size?: number; q?: string }) =>
+  mlShipments: (params?: { page?: number; page_size?: number; q?: string; status?: string; logistic_type?: string }) =>
     api<ShipmentsResponse>('/api/mercadolibre/shipments' + queryString(params ?? {})),
   shipmentLabel: (external_id: string) =>
     apiBlob('/api/mercadolibre/shipments/' + encodeURIComponent(external_id) + '/label'),

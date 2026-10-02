@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { channelsApi, inventoryApi } from '../lib/api/endpoints'
+import { statusLabel } from '../lib/channelStatus'
 import type {
   ChannelStatus,
   ListingQuery,
@@ -16,6 +17,7 @@ import type {
 import { fmtMoney, fmtPct } from '../lib/format'
 import { ErrorBox, SpinnerText } from '../components/ui'
 import { StatusBadge } from '../components/StatusBadge'
+import { CategoryChip } from '../components/CategoryChip'
 import { ProductDrawer } from '../features/inventory/ProductDrawer'
 import { FilterField, Popover } from '../features/inventory/inventoryColumns'
 import { CatalogTag } from '../features/inventory/MLCatalog'
@@ -89,11 +91,7 @@ const PubCell = (externalId: string | null, permalink: string | null) => {
   )
 }
 
-const CategoryCell = (p: MLListingRow | TNListingRow) => (
-  <span className="px-2 py-0.5 rounded-md text-xs whitespace-nowrap" style={{ background: '#F1F5F9', color: '#94A3B8' }}>
-    {p.category || '—'}
-  </span>
-)
+const CategoryCell = (p: MLListingRow | TNListingRow) => <CategoryChip category={p.category} />
 
 const StockCell = (p: MLListingRow | TNListingRow) => (
   <span className="tabular-nums" style={{ color: p.stock > 0 ? '#0A1628' : '#DC2626' }}>
@@ -257,10 +255,10 @@ const tnColStore = makeColStore('omnipanel.tn.cols', TN_COL_MAP, TN_DEFAULT_COLS
 
 const LISTING_STATUS_FILTER = [
   { value: 'all', label: 'Todos' },
-  { value: 'published', label: 'Publicado' },
-  { value: 'paused', label: 'Pausado' },
-  { value: 'prepublished', label: 'Pre-publicado' },
-  { value: 'under_review', label: 'En revisión' },
+  { value: 'published', label: statusLabel('published') },
+  { value: 'paused', label: statusLabel('paused') },
+  { value: 'prepublished', label: statusLabel('prepublished') },
+  { value: 'under_review', label: statusLabel('under_review') },
 ]
 const PERF_FILTER = [
   { value: 'all', label: 'Todas' },

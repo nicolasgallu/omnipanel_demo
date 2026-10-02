@@ -73,7 +73,17 @@ export function ProductDrawer({
     detail?.listings.find((l) => l.platform === 'mercadolibre') ?? null
   const tnListing: ProductListing | null =
     detail?.listings.find((l) => l.platform === 'tiendanube') ?? null
-  const m = marginPct(p.cost, p.price)
+  // Precio mostrado en el panel izquierdo según la pestaña activa:
+  // Datos generales → precio del inventario; ML/TN → precio del listing de ese
+  // canal, con respaldo al precio del inventario cuando todavía no hay precio
+  // definido (primera publicación). El margen se calcula sobre ese precio.
+  const displayPrice =
+    tab === 'ml'
+      ? (mlListing?.price ?? p.price)
+      : tab === 'tn'
+        ? (tnListing?.price ?? p.price)
+        : p.price
+  const m = marginPct(p.cost, displayPrice)
   const mColor = m > 40 ? '#16A34A' : m > 20 ? '#D97706' : '#DC2626'
 
   const removeImage = async (imageId: number) => {
@@ -260,7 +270,7 @@ export function ProductDrawer({
               {[
                 { label: 'Stock', value: `${p.stock} u.`, color: '#0A1628' },
                 { label: 'Costo', value: fmtMoney(p.cost), color: '#64748B' },
-                { label: 'Precio', value: fmtMoney(p.price), color: '#0A1628' },
+                { label: 'Precio', value: fmtMoney(displayPrice), color: '#0A1628' },
               ].map((r) => (
                 <div key={r.label} className="flex items-center justify-between">
                   <span className="text-xs text-muted">{r.label}</span>

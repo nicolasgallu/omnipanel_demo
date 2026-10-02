@@ -8,6 +8,7 @@ from sqlalchemy import text
 from app.utils.logger import logger
 from app.settings.config import SCHEMA_MERCADOLIBRE
 from app.integrations.core.credentials import get_access_token
+from app.integrations.core.bools import is_truthy
 from app.integrations.mercadolibre.product_handler import get_data_for_meli
 from app.db.engine import engine
 
@@ -33,7 +34,8 @@ def _flatten_settings(settings_json):
 
 
 def _to_bool(value):
-    return str(value).strip().lower() in ("true", "1", "si", "yes")
+    # Fuente única de "verdadero": app/integrations/core/bools.is_truthy.
+    return is_truthy(value)
 
 
 def _weight_from_dimensions(dimensions):

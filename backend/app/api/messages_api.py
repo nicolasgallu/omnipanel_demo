@@ -487,6 +487,11 @@ def reply_manual(message_id):
             + " SET reply_status = 'answered', handled_at = NOW(), last_outgoing_at = NOW()"
             + " WHERE id = :id",
             {"id": message_id})
+    # Limpiar intentos fallidos previos: ya quedó respondida, no deben seguir
+    # mostrando el cartel de error ("No se pudo enviar la respuesta").
+    execute("UPDATE " + REPLIES_TABLE
+            + " SET status = 'discarded' WHERE message_id = :id AND status = 'failed'",
+            {"id": message_id})
     reply = get_one("SELECT * FROM " + REPLIES_TABLE + " WHERE id = :id",
                     {"id": reply["id"]})
     return jsonify({"reply": _serialize_reply(reply)}), 200

@@ -994,7 +994,40 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   // ── Envíos de MercadoLibre ──
   if (method === 'GET' && path === '/api/mercadolibre/shipments') {
     await sleep(400)
-    return send(200, { items: MOCK_SHIPMENTS })
+    const q = (url.searchParams.get('q') || '').toLowerCase()
+    const status = url.searchParams.get('status') || ''
+    const logistic = url.searchParams.get('logistic_type') || ''
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1))
+    const pageSize = Math.min(200, Number(url.searchParams.get('page_size') || 50))
+
+    const shipMatches = (s: Shipment) =>
+      !q ||
+      [s.external_id, s.order_id ?? '', s.tracking_number ?? '', s.receiver.city, ...s.items.map((i) => i.title)]
+        .some((v) => v.toLowerCase().includes(q))
+    const searched = MOCK_SHIPMENTS.filter(shipMatches)
+    // cross_docking agrupa también xd_drop_off (igual que el backend).
+    const logisticMatch = (s: Shipment) =>
+      logistic === 'cross_docking'
+        ? s.logistic_type === 'cross_docking' || s.logistic_type === 'xd_drop_off'
+        : s.logistic_type === logistic
+    const rows = searched.filter(
+      (s) => (!status || s.status === status) && (!logistic || logisticMatch(s)),
+    )
+    const start = (page - 1) * pageSize
+    const counts = {
+      total: searched.length,
+      to_prepare: searched.filter((s) => s.status === 'pending' || s.status === 'handling').length,
+      in_transit: searched.filter((s) => s.status === 'ready_to_ship' || s.status === 'shipped').length,
+      delivered: searched.filter((s) => s.status === 'delivered').length,
+      incidents: searched.filter((s) => s.status === 'not_delivered' || s.status === 'cancelled').length,
+    }
+    return send(200, {
+      items: rows.slice(start, start + pageSize),
+      total: rows.length,
+      page,
+      page_size: pageSize,
+      counts,
+    })
   }
 
   // ── Descargar fotos de la publicación ML (meli_pictures) ──

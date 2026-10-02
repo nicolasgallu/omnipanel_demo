@@ -233,6 +233,8 @@ export interface CatalogEligibility {
 
 export interface TNSettings {
   settings: Record<string, { DEFAULT_VALUE: unknown; USER_INPUT_VALUE: unknown }>
+  gender_options?: string[]
+  age_group_options?: string[]
 }
 
 export interface TNConfig {
@@ -568,11 +570,13 @@ export interface Shipment {
   last_updated: string
 }
 
-export interface ShipmentSummary {
-  pending: number
-  on_way: number
+// Métricas del strip: con la búsqueda pero SIN los filtros de estado/tipo.
+export interface ShipmentCounts {
+  total: number
+  to_prepare: number
+  in_transit: number
   delivered: number
-  issues: number
+  incidents: number
 }
 
 export interface ShipmentsResponse {
@@ -580,7 +584,7 @@ export interface ShipmentsResponse {
   total: number
   page: number
   page_size: number
-  summary: ShipmentSummary
+  counts: ShipmentCounts
 }
 
 // ─── Credenciales de integración (Configuración) ─────────────────────────────

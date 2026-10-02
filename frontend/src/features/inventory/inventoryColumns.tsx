@@ -7,8 +7,10 @@ import type { Product } from '../../lib/api/types'
 import { inventoryApi } from '../../lib/api/endpoints'
 import { EditableCell } from './rowEdit'
 import { fmtMoney } from '../../lib/format'
+import { CHANNEL_STATUS_VALUES, statusLabel } from '../../lib/channelStatus'
 import { ProductImage } from '../../components/ui'
 import { StatusBadge } from '../../components/StatusBadge'
+import { CategoryChip } from '../../components/CategoryChip'
 
 export type ColKey =
   | 'producto'
@@ -94,11 +96,7 @@ export const COLUMNS: ColDef[] = [
   {
     key: 'category',
     label: 'Categoría',
-    render: (p) => (
-      <span className="px-2 py-0.5 rounded-md text-xs" style={{ background: '#F1F5F9', color: '#94A3B8' }}>
-        {p.category || '—'}
-      </span>
-    ),
+    render: (p) => <CategoryChip category={p.category} />,
   },
   {
     key: 'name_edited',
@@ -215,12 +213,7 @@ export const DEFAULT_FILTERS: InventoryFilters = { category: 'all', ml: 'all', t
 
 export const STATUS_FILTER = [
   { value: 'all', label: 'Todos' },
-  { value: 'published', label: 'Publicado' },
-  { value: 'paused', label: 'Pausado' },
-  { value: 'prepublished', label: 'Pre-publicado' },
-  { value: 'under_review', label: 'En revisión' },
-  { value: 'unpublished', label: 'Sin publicar' },
-  { value: 'failed', label: 'Con error' },
+  ...CHANNEL_STATUS_VALUES.map((v) => ({ value: v, label: statusLabel(v) })),
 ]
 
 export const activeFilterCount = (f: InventoryFilters) =>

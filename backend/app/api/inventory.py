@@ -6,6 +6,7 @@ Everything is scoped to the authenticated user's business_id.
 import csv
 import io
 import math
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -166,7 +167,7 @@ def _list_product_dict(product_id):
     row = get_one(
         "SELECT p.id, p.internal_code, p.sku, p.gtin, p.name, p.name_edited,"
         " p.brand, p.model, p.category, p.stock, p.cost, p.price, p.dimensions,"
-        " p.created_at, p.updated_at,"
+        " p.description, p.created_at, p.updated_at,"
         " ml.price AS ml_price, tn.price AS tn_price,"
         " " + _ML_STATUS_SQL + " AS ml_status,"
         " " + _TN_STATUS_SQL + " AS tn_status,"
@@ -190,6 +191,7 @@ def _list_product_dict(product_id):
         "cost": _serializable(row.get("cost") or 0),
         "price": _serializable(row.get("price") or 0),
         "dimensions": row.get("dimensions"),
+        "description": row.get("description"),
         "created_at": _serializable(row.get("created_at")),
         "updated_at": _serializable(row.get("updated_at")),
         "ml_price": _serializable(row.get("ml_price")),
@@ -424,14 +426,27 @@ _EXPORT_COLUMNS = [
     {"key": "tn_status", "label": "Estado TN"},
 ]
 
-_STATUS_LABELS = {
-    "published": "Publicado",
-    "paused": "Pausado",
-    "prepublished": "Pre-publicado",
-    "under_review": "En revisión",
-    "unpublished": "Sin publicar",
-    "failed": "Sin publicar",
-}
+# Catálogo canónico de estados de canal (ML/TN) con sus etiquetas en español.
+# Fuente única: el front lo consume vía GET /api/inventory/channel-statuses y el
+# CSV usa _STATUS_LABELS (derivado de acá).
+CHANNEL_STATUSES = [
+    ("unpublished", "Sin publicar"),
+    ("prepublished", "Pre-publicado"),
+    ("under_review", "En revisión"),
+    ("published", "Publicado"),
+    ("paused", "Pausado"),
+    ("failed", "Error de publicación"),
+]
+_STATUS_LABELS = dict(CHANNEL_STATUSES)
+
+
+@inventory_bp.route("/channel-statuses", methods=["GET"])
+@require_auth
+def channel_statuses():
+    """Catálogo de estados de canal (value + label) — fuente única para el front."""
+    return jsonify({"statuses": [
+        {"value": value, "label": label} for value, label in CHANNEL_STATUSES
+    ]})
 
 
 @inventory_bp.route("/products/export.csv", methods=["GET"])
@@ -858,19 +873,10 @@ def upload_image(product_id):
         return jsonify({"error": "limit_reached",
                         "message": "Máximo %d imágenes por producto" % MAX_IMAGES_PER_PRODUCT}), 400
 
-    existing = get_all(
-        "SELECT url FROM " + IMAGES_TABLE + " WHERE product_id = :id",
-        {"id": product_id})
-    used = set()
-    for r in existing:
-        filename = (r["url"] or "").rsplit("/", 1)[-1]
-        if "_" in filename:
-            used.add(filename)
-    number = 1
-    while "{}_{}.png".format(product_id, number) in used:
-        number += 1
-
-    blob_path = "{}/{}_{}.png".format(product_id, product_id, number)
+    # Nombre único por subida (uuid): si se reutilizara el contador tras borrar
+    # una imagen, la nueva caería en la MISMA URL y el navegador/CDN mostraría la
+    # imagen vieja cacheada (la que "reaparece"). Con uuid nunca hay colisión.
+    blob_path = "{}/{}_{}.png".format(product_id, product_id, uuid.uuid4().hex)
     try:
         blob = _gcs_bucket().blob(blob_path)
         blob.upload_from_string(raw, content_type="image/png")

@@ -1,7 +1,8 @@
 // Botón flotante de soporte + modal de ticket (Figma: disponible en toda la app).
 // POST /api/support/tickets (asunto + descripción; prioridad por defecto normal).
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { toPng } from 'html-to-image'
 import { supportApi } from '../lib/api/endpoints'
 
 export function SupportFab() {
@@ -9,6 +10,7 @@ export function SupportFab() {
   return (
     <>
       <button
+        data-capture-ignore
         onClick={() => setOpen(true)}
         title="Soporte"
         aria-label="Soporte"
@@ -25,7 +27,7 @@ export function SupportFab() {
         </span>
       </button>
       {open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ fontFamily: "'Inter', sans-serif" }}>
+        <div data-capture-ignore className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ fontFamily: "'Inter', sans-serif" }}>
           <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={() => setOpen(false)} />
           <div
             className="relative w-[440px] max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl scroll-slim"
@@ -192,8 +194,68 @@ function TicketImageDrop({ files, setFiles }: { files: TicketAttachment[]; setFi
       .map((f) => ({ url: URL.createObjectURL(f), name: f.name }))
     setFiles([...files, ...next])
   }
+
+  // Captura la pantalla actual del panel (sin el popup de soporte ni el botón
+  // flotante, ambos con data-capture-ignore) y la agrega a los adjuntos.
+  const [capturing, setCapturing] = useState(false)
+  const [captureError, setCaptureError] = useState<string | null>(null)
+  const capture = async () => {
+    if (capturing) return
+    setCapturing(true)
+    setCaptureError(null)
+    try {
+      const url = await toPng(document.body, {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        pixelRatio: Math.min(2, window.devicePixelRatio || 1),
+        filter: (n) => !(n instanceof HTMLElement && n.dataset.captureIgnore !== undefined),
+      })
+      const d = new Date()
+      const name = `captura-${String(d.getHours()).padStart(2, '0')}${String(d.getMinutes()).padStart(2, '0')}.png`
+      setFiles([...files, { url, name }])
+    } catch {
+      setCaptureError('No pudimos tomar la captura. Probá adjuntándola manualmente.')
+    } finally {
+      setCapturing(false)
+    }
+  }
+
+  // Pegar una imagen desde el portapapeles (Ctrl/Cmd + V) con el formulario abierto.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const imgs = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'))
+      if (imgs.length) {
+        setFiles([...files, ...imgs.map((f) => ({ url: URL.createObjectURL(f), name: f.name || 'captura.png' }))])
+      }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [files, setFiles])
+
   return (
     <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        onClick={capture}
+        disabled={capturing}
+        className="flex items-center justify-center gap-2 rounded-xl py-2.5 text-xs font-semibold transition-colors"
+        style={{ border: '1.5px solid #C7D2FE', background: '#EEF2FF', color: '#4F46E5', cursor: capturing ? 'default' : 'pointer', opacity: capturing ? 0.7 : 1 }}
+        onMouseEnter={(e) => {
+          if (!capturing) e.currentTarget.style.background = '#E0E7FF'
+        }}
+        onMouseLeave={(e) => (e.currentTarget.style.background = '#EEF2FF')}
+      >
+        {capturing ? (
+          <span className="w-3.5 h-3.5 rounded-full border-2 animate-spin" style={{ borderColor: '#C7D2FE', borderTopColor: '#4F46E5' }} />
+        ) : (
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path d="M2 5.5V4a1.5 1.5 0 0 1 1.5-1.5H5M11 2.5h1.5A1.5 1.5 0 0 1 14 4v1.5M14 10.5V12a1.5 1.5 0 0 1-1.5 1.5H11M5 13.5H3.5A1.5 1.5 0 0 1 2 12v-1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="8" cy="8" r="2.2" stroke="currentColor" strokeWidth="1.5" />
+          </svg>
+        )}
+        {capturing ? 'Capturando…' : 'Capturar esta pantalla'}
+      </button>
+      {captureError && <p className="text-[11px]" style={{ color: '#DC2626' }}>{captureError}</p>}
       <label
         className="flex flex-col items-center justify-center gap-1.5 rounded-xl cursor-pointer transition-colors py-5 px-3 text-center"
         style={{ border: '1.5px dashed #CBD5E1', background: '#F8FAFC' }}
@@ -212,7 +274,7 @@ function TicketImageDrop({ files, setFiles }: { files: TicketAttachment[]; setFi
           <path d="M3.5 13v2a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5v-2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
         </svg>
         <span className="text-xs font-medium text-subtle">Adjuntar captura del problema</span>
-        <span style={{ fontSize: '10px', color: '#94A3B8' }}>Arrastrá una imagen o hacé click · PNG, JPG</span>
+        <span style={{ fontSize: '10px', color: '#94A3B8' }}>Arrastrá, pegá (Ctrl+V) o hacé click · PNG, JPG</span>
         <input
           type="file"
           accept="image/*"

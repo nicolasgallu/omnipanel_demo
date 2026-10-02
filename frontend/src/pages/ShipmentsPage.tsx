@@ -4,8 +4,9 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { channelsApi } from '../lib/api/endpoints'
-import type { Shipment, ShipmentSummary } from '../lib/api/types'
+import type { Shipment, ShipmentCounts } from '../lib/api/types'
 import { ErrorBox, SpinnerText } from '../components/ui'
+import { FilterField, Popover } from '../features/inventory/inventoryColumns'
 
 type ShipStatus =
   | 'pending'
@@ -69,6 +70,15 @@ const LOGISTIC_LABEL: Record<string, string> = {
 }
 const subLabel = (s: string | null) => (s ? SUBSTATUS_LABEL[s] ?? s.replace(/_/g, ' ') : null)
 const logLabel = (s: string) => LOGISTIC_LABEL[s] ?? s.replace(/_/g, ' ')
+
+// Opciones del filtro por tipo logístico: se envían los CÓDIGOS crudos de Meli
+// (el backend agrupa cross_docking con xd_drop_off).
+const LOGISTIC_FILTERS = [
+  { value: 'cross_docking', label: 'Cross docking' },
+  { value: 'drop_off', label: 'Punto de despacho' },
+  { value: 'fulfillment', label: 'Full' },
+  { value: 'self_service', label: 'Flex' },
+]
 
 // ─── Acción "Descargar etiqueta" (Figma) ──────────────────────────────────────
 
@@ -169,13 +179,13 @@ const ICON_ONWAY = SHIP_STATUS.shipped.icon
 const ICON_DONE = SHIP_STATUS.delivered.icon
 const ICON_ISSUE = SHIP_STATUS.not_delivered.icon
 
-function shipStats(total: number, summary: ShipmentSummary): Stat[] {
+function shipStats(counts: ShipmentCounts): Stat[] {
   return [
-    { label: 'Envíos', value: total, sub: 'total', tone: '#F59E0B', icon: ICON_LIST },
-    { label: 'Por preparar', value: summary.pending, tone: '#D97706', icon: ICON_PREP },
-    { label: 'En camino', value: summary.on_way, tone: '#0891B2', icon: ICON_ONWAY },
-    { label: 'Entregados', value: summary.delivered, tone: '#16A34A', icon: ICON_DONE },
-    { label: 'Incidencias', value: summary.issues, tone: '#DC2626', icon: ICON_ISSUE },
+    { label: 'Envíos', value: counts.total, sub: 'total', tone: '#F59E0B', icon: ICON_LIST },
+    { label: 'Por preparar', value: counts.to_prepare, tone: '#D97706', icon: ICON_PREP },
+    { label: 'En camino', value: counts.in_transit, tone: '#0891B2', icon: ICON_ONWAY },
+    { label: 'Entregados', value: counts.delivered, tone: '#16A34A', icon: ICON_DONE },
+    { label: 'Incidencias', value: counts.incidents, tone: '#DC2626', icon: ICON_ISSUE },
   ]
 }
 
@@ -206,7 +216,11 @@ export function ShipmentsPage() {
   const [search, setSearch] = useState('')
   const [items, setItems] = useState<Shipment[]>([])
   const [total, setTotal] = useState(0)
-  const [summary, setSummary] = useState<ShipmentSummary>({ pending: 0, on_way: 0, delivered: 0, issues: 0 })
+  const [counts, setCounts] = useState<ShipmentCounts>({ total: 0, to_prepare: 0, in_transit: 0, delivered: 0, incidents: 0 })
+  // Filtros (Figma): estado y tipo logístico, combinados con la búsqueda.
+  const [status, setStatus] = useState<ShipStatus | 'all'>('all')
+  const [logistic, setLogistic] = useState<string>('all')
+  const filterCount = (status !== 'all' ? 1 : 0) + (logistic !== 'all' ? 1 : 0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -223,22 +237,28 @@ export function ShipmentsPage() {
     return () => clearTimeout(t)
   }, [toast])
 
-  // Reiniciar a la primera página cuando cambia la búsqueda o el tamaño.
+  // Reiniciar a la primera página cuando cambia la búsqueda, el tamaño o los filtros.
   useEffect(() => {
     setPage(0)
-  }, [search, pageSize])
+  }, [search, pageSize, status, logistic])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError(null)
     channelsApi
-      .mlShipments({ page: page + 1, page_size: pageSize, q: search || undefined })
+      .mlShipments({
+        page: page + 1,
+        page_size: pageSize,
+        q: search || undefined,
+        status: status === 'all' ? undefined : status,
+        logistic_type: logistic === 'all' ? undefined : logistic,
+      })
       .then((res) => {
         if (cancelled) return
         setItems(res.items)
         setTotal(res.total)
-        setSummary(res.summary)
+        setCounts(res.counts)
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message)
@@ -249,7 +269,7 @@ export function ShipmentsPage() {
     return () => {
       cancelled = true
     }
-  }, [refreshKey, page, pageSize, search])
+  }, [refreshKey, page, pageSize, search, status, logistic])
 
   const downloadLabel = async (s: Shipment) => {
     if (busyId) return
@@ -316,9 +336,67 @@ export function ShipmentsPage() {
               {total} {total === 1 ? 'envío' : 'envíos'}
             </span>
           </div>
+          <Popover
+            width={280}
+            trigger={(o) => (
+              <button
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                style={{
+                  border: `1.5px solid ${o || filterCount ? '#4F46E5' : '#E2E8F0'}`,
+                  color: filterCount ? '#4F46E5' : '#475569',
+                  background: filterCount ? '#EEF2FF' : 'white',
+                }}
+              >
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden>
+                  <path d="M2 3.5h12M4 8h8M6 12.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+                Filtros
+                {filterCount > 0 && (
+                  <span className="ml-0.5 px-1.5 rounded-full text-white" style={{ fontSize: '9px', fontWeight: 700, background: '#4F46E5' }}>
+                    {filterCount}
+                  </span>
+                )}
+              </button>
+            )}
+          >
+            {() => (
+              <div className="flex flex-col gap-3 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-ink">Filtros</span>
+                  {filterCount > 0 && (
+                    <button
+                      onClick={() => {
+                        setStatus('all')
+                        setLogistic('all')
+                      }}
+                      className="text-xs font-medium transition-colors hover:underline"
+                      style={{ color: '#4F46E5' }}
+                    >
+                      Limpiar
+                    </button>
+                  )}
+                </div>
+                <FilterField
+                  label="Estado"
+                  value={status}
+                  onChange={(v) => setStatus(v as ShipStatus | 'all')}
+                  options={[
+                    { value: 'all', label: 'Todos' },
+                    ...(Object.keys(SHIP_STATUS) as ShipStatus[]).map((k) => ({ value: k, label: SHIP_STATUS[k].label })),
+                  ]}
+                />
+                <FilterField
+                  label="Tipo logístico"
+                  value={logistic}
+                  onChange={setLogistic}
+                  options={[{ value: 'all', label: 'Todos' }, ...LOGISTIC_FILTERS]}
+                />
+              </div>
+            )}
+          </Popover>
         </div>
 
-        <StatStrip stats={shipStats(total, summary)} />
+        <StatStrip stats={shipStats(counts)} />
 
         {error ? (
           <div className="max-w-xl">
@@ -347,7 +425,7 @@ export function ShipmentsPage() {
                   ) : rows.length === 0 ? (
                     <tr>
                       <td colSpan={cols.length} className="px-4 py-16 text-center text-muted">
-                        No hay envíos que coincidan con la búsqueda.
+                        No hay envíos que coincidan con la búsqueda o los filtros.
                       </td>
                     </tr>
                   ) : (

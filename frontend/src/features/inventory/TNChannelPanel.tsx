@@ -79,6 +79,10 @@ export function TNChannelPanel({
   const [lastFailure, setLastFailure] = useState<{ reason: string | null; remedy: string | null } | null>(null)
 
   const [tnCfg, setTnCfg] = useState<TNCfgState>(TN_CONFIG_DEFAULT)
+  // Opciones de género/edad: el backend es la fuente (las trae tnSettings);
+  // estas son el respaldo mientras no llegan.
+  const [genderOptions, setGenderOptions] = useState<string[]>(GENDER_OPTIONS)
+  const [ageOptions, setAgeOptions] = useState<string[]>(AGE_OPTIONS)
   // Precio de la publicación (tiendanube.product_listings.price): editable en
   // el paso Configurar. Vacío = precio del inventario al guardar.
   const [priceValue, setPriceValue] = useState<string>(
@@ -146,6 +150,10 @@ export function TNChannelPanel({
           seo_title: get('SEO_TITLE') ? String(get('SEO_TITLE')) : '',
           seo_description: get('SEO_DESCRIPTION') ? String(get('SEO_DESCRIPTION')) : '',
         })
+        // '—' es el estado "sin elegir" (UI-only); las opciones reales vienen
+        // del backend, que es la fuente de verdad de los labels.
+        if (res.gender_options?.length) setGenderOptions(['—', ...res.gender_options])
+        if (res.age_group_options?.length) setAgeOptions(['—', ...res.age_group_options])
       })
       .catch((err: Error) => {
         if (!cancelled) setError(err.message)
@@ -295,7 +303,8 @@ export function TNChannelPanel({
       )}
 
       {isActive && step === configStep && (
-        <TNConfigStep cfg={tnCfg} set={setTn} priceValue={priceValue} onPriceChange={setPriceValue} />
+        <TNConfigStep cfg={tnCfg} set={setTn} priceValue={priceValue} onPriceChange={setPriceValue}
+          genderOptions={genderOptions} ageOptions={ageOptions} />
       )}
 
       {(status === 'published' || (status === 'prepublished' && prepublishedView)) && (
@@ -430,11 +439,15 @@ export function TNConfigStep({
   set,
   priceValue,
   onPriceChange,
+  genderOptions,
+  ageOptions,
 }: {
   cfg: TNCfgState
   set: <K extends keyof TNCfgState>(k: K, v: TNCfgState[K]) => void
   priceValue?: string
   onPriceChange?: (v: string) => void
+  genderOptions: string[]
+  ageOptions: string[]
 }) {
   const {
     gender,
@@ -482,8 +495,8 @@ export function TNConfigStep({
       <div className="flex flex-col gap-2">
         <SectionLabel>Audiencia</SectionLabel>
         <div className="grid grid-cols-2 gap-2">
-          <ValueCard label="Género" value={gender} options={GENDER_OPTIONS} onChange={(v) => set('gender', v)} />
-          <ValueCard label="Grupo etario" value={age_group} options={AGE_OPTIONS} onChange={(v) => set('age_group', v)} />
+          <ValueCard label="Género" value={gender} options={genderOptions} onChange={(v) => set('gender', v)} />
+          <ValueCard label="Grupo etario" value={age_group} options={ageOptions} onChange={(v) => set('age_group', v)} />
         </div>
       </div>
 
