@@ -295,19 +295,34 @@ def _pack_id_from_data(data):
     return None
 
 
+def _question_id(message):
+    """Id de la pregunta como entero (el endpoint clásico lo espera numérico)."""
+    raw = message.get("external_id")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return raw
+
+
 def send_reply(account_id, message, text):
     """Envía la respuesta a Meli. Devuelve el id externo de la respuesta creada.
 
-    question -> POST /marketplace/answers; message -> POST
+    question -> POST /answers; message -> POST
     /marketplace/messages/packs/{pack_id}. `_meli_request` no reintenta POST.
     Las excepciones se propagan al caller (que decide needs_human).
+
+    Doc oficial (Questions & Answers): responder una pregunta es
+    ``POST https://api.mercadolibre.com/answers`` con
+    ``{"question_id": <int>, "text": "..."}`` — el endpoint de preguntas NO
+    lleva el prefijo ``/marketplace`` (ese es solo de la mensajería post-venta).
+    https://developers.mercadolibre.com.ar/en_us/api-docs/questions
     """
     token = get_access_token(account_id).get("access_token")
     kind = message.get("kind")
 
     if kind == "question":
-        url = MELI_BASE_URL + "/marketplace/answers"
-        json_body = {"question_id": str(message.get("external_id")), "text": text}
+        url = MELI_BASE_URL + "/answers"
+        json_body = {"question_id": _question_id(message), "text": text}
         response = _meli_request("POST", url, token, json_body=json_body, timeout=30)
         response.raise_for_status()
         payload = response.json() or {}
