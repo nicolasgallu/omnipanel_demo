@@ -650,16 +650,9 @@ def get_product(product_id):
     })
 
 
-_PREPUBLISH_DEFAULT_SYS = {
-    "title": ("Sos un redactor experto en ecommerce. Mejorá el título del producto."
-              " OBLIGATORIO: devolvé SOLO el título, máx. 60 caracteres, sin comillas ni comentarios."),
-    "description": ("Sos un redactor experto en ecommerce. Escribí la descripción del producto."
-                    " OBLIGATORIO: devolvé SOLO la descripción, sin comillas ni comentarios."),
-    "brand": ("Indicá únicamente la marca del producto. Si no podés determinarla, respondé 'Genérico'."
-              " OBLIGATORIO: devolvé SOLO la marca."),
-    "model": ("Indicá únicamente el modelo del producto. Si no existe, generá un código corto."
-              " OBLIGATORIO: devolvé SOLO el modelo."),
-}
+# Defaults compartidos (app/service/prompt_defaults.py): el GET de
+# /api/ai/prompts muestra los mismos textos que usa la IA acá.
+from app.service.prompt_defaults import PREPUBLISH_SYS_DEFAULTS as _PREPUBLISH_DEFAULT_SYS
 
 
 def _prepublish_sys_prompts(business_id):

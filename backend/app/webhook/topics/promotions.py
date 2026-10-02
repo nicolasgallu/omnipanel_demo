@@ -44,8 +44,10 @@ def _fetch(account, kind, external_id):
     token = get_access_token(account["id"]).get("access_token")
     path = "offers" if kind == "offer" else "candidates"
     url = MELI_BASE_URL + "/seller-promotions/" + path + "/" + external_id
+    # Doc oficial (central-de-promociones): la llamada usa app_version=v2.
     try:
-        response = _meli_request("GET", url, token, timeout=30)
+        response = _meli_request("GET", url, token,
+                                 params={"app_version": "v2"}, timeout=30)
         response.raise_for_status()
         return response.json()
     except Exception as exc:
@@ -56,7 +58,11 @@ def _fetch(account, kind, external_id):
 def _upsert(account, external_id, kind, payload):
     raw_item = payload.get("item_id") or payload.get("item")
     item_id = str(raw_item) if raw_item else None
-    status = str(payload.get("status")) or None
+    # Doc oficial (central-de-promociones): status es un objeto {"id": ...}
+    # (offers: ACTIVE/programmed/inactive; candidates: candidate).
+    raw_status = payload.get("status")
+    status = raw_status.get("id") if isinstance(raw_status, dict) else raw_status
+    status = str(status) if status else None
 
     execute(
         "INSERT INTO " + PROMOTIONS_TABLE

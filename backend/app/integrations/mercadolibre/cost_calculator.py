@@ -100,11 +100,22 @@ def calculate_cost(payload):
         "listing_type_id": listing_type,
         "billable_weight": _weight_from_dimensions(dimensions),
     })
-    fee_data = _meli_get("/sites/MLA/listing_prices", token, fee_params)
+    fee_list = _meli_get("/sites/MLA/listing_prices", token, fee_params)
+    # Doc oficial (fees-for-listing) + API real: la respuesta es una LISTA con
+    # un elemento por listing_type. Se elige el del listing_type pedido (con
+    # fallback al primero); cada elemento trae sale_fee_amount,
+    # sale_fee_details/listing_fee_details, etc. — NO existe `fee_tax`.
+    fee_data = next(
+        (x for x in fee_list if isinstance(x, dict)
+         and x.get("listing_type_id") == listing_type),
+        (fee_list or [{}])[0] if isinstance(fee_list, list) else {},
+    )
+    if not isinstance(fee_data, dict):
+        fee_data = {}
     sale_fee = fee_data.get("sale_fee_details", {})
     listing_fee = fee_data.get("listing_fee_details", {})
-    # Si la API no informa fee_tax (o informa 0), usamos 21% (IVA en Argentina)
-    fee_tax = fee_data.get("fee_tax") or DEFAULT_FEE_TAX
+    # La API no expone fee_tax: siempre el IVA argentino por default.
+    fee_tax = DEFAULT_FEE_TAX
 
     # ---- 2. Costo de envío --------------------------------------------------
     user_id = _meli_get("/users/me", token).get("id")

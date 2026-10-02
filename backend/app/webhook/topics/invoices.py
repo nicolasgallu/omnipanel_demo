@@ -36,6 +36,11 @@ def handle(account, data):
         logger.warning("Could not fetch Meli invoice %s: %s", external_id, exc)
         return
 
+    # Doc oficial (descargar-facturas-mla): la factura NO trae order_id
+    # top-level; la orden vive en items[].external_order_id.
+    items = payload.get("items") or []
+    first_item = items[0] if items and isinstance(items[0], dict) else {}
+    order_raw = first_item.get("external_order_id")
     execute(
         "INSERT INTO " + INVOICES_TABLE
         + " (account_id, external_id, order_id, status, data)"
@@ -45,7 +50,7 @@ def handle(account, data):
         {
             "account_id": account["id"],
             "external_id": str(external_id),
-            "order_id": str(payload.get("order_id")) if payload.get("order_id") else None,
+            "order_id": str(order_raw) if order_raw else None,
             "status": str(payload.get("status")) or None,
             "data": json.dumps(payload, ensure_ascii=False),
         },

@@ -24,12 +24,15 @@ def _as_float(value):
         return None
 
 
-def _first_numeric(values):
-    for value in values:
-        result = _as_float(value)
-        if result is not None:
-            return result
-    return None
+def _amount(value):
+    """Monto de un campo de precio según la doc oficial de Meli
+    (https://developers.mercadolibre.com.ar/es_ar/calidad-de-publicaciones/
+    referencias-de-precios): current_price/suggested_price son objetos
+    {"amount": ..., "usd_amount": ...}. Se tolera un número plano por
+    robustez."""
+    if isinstance(value, dict):
+        return _as_float(value.get("amount"))
+    return _as_float(value)
 
 
 def _as_str(value):
@@ -90,10 +93,9 @@ def handle(account, data):
         logger.warning("Could not fetch Meli price suggestion %s: %s", item_id, exc)
         return
 
-    suggested_price = _first_numeric(
-        [payload.get("suggested_price"), payload.get("price"), payload.get("price_to_win")]
-    )
-    current_price = _as_float(payload.get("current_price"))
+    # Doc oficial: los precios vienen como objetos {amount, usd_amount}.
+    suggested_price = _amount(payload.get("suggested_price"))
+    current_price = _amount(payload.get("current_price"))
     status = _as_str(payload.get("status"))
     data = json.dumps(payload, ensure_ascii=False)
     _upsert(account, item_id, current_price, suggested_price, status, data)
@@ -117,10 +119,10 @@ def handle_competition(account, data):
         logger.warning("Could not fetch Meli price suggestion %s: %s", item_id, exc)
         return
 
-    suggested_price = _first_numeric(
-        [payload.get("price"), payload.get("price_to_win"), payload.get("winning_price")]
-    )
-    current_price = None
+    # Doc oficial (catalog-competition): price_to_win y current_price son
+    # números top-level; status es string ("winning", "competing", ...).
+    suggested_price = _as_float(payload.get("price_to_win"))
+    current_price = _as_float(payload.get("current_price"))
     status = _as_str(payload.get("status")) or _as_str(payload.get("competition_status"))
     data = json.dumps(payload, ensure_ascii=False)
     _upsert(account, item_id, current_price, suggested_price, status, data)

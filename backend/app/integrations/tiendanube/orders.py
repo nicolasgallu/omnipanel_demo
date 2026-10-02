@@ -26,23 +26,27 @@ def fetch_order(account, order_id):
     return _cast_products(order)
 
 
-def derive_event_type(order):
+def derive_event_type(order, trigger="paid"):
     """Map payment_status/status to our claim key.
 
+    `trigger` = cuándo el business descuenta stock (config global):
+    - "paid" (default): solo cuando el pago está capturado.
+    - "confirmed": descuenta desde que la orden se abre en TiendaNube.
+    La reversa se evalúa SIEMPRE primero.
     Returns 'order_paid', 'order_cancelled', or None (not actionable).
     """
     payment_status = order.get("payment_status")
     status = order.get("status")
 
-    # Paid and not cancelled -> sale.
-    if payment_status == "paid" and status != "cancelled":
-        return "order_paid"
-
-    # Voided/refunded, or cancelled -> reversal.
+    # Voided/refunded, or cancelled -> reversal (siempre).
     if payment_status in ("voided", "refunded") or status == "cancelled":
         return "order_cancelled"
 
-    # Anything else (open/pending/authorized/...) -> not actionable.
+    # Sale: pagada, o (trigger confirmed) orden abierta.
+    if payment_status == "paid" or (trigger == "confirmed" and status == "open"):
+        return "order_paid"
+
+    # Anything else (pending/authorized/...) -> not actionable.
     return None
 
 

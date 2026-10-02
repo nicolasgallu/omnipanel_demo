@@ -7,6 +7,7 @@ import { LoginPage } from './pages/LoginPage'
 import { InventoryPage } from './pages/InventoryPage'
 import { ChannelListingsPage } from './pages/ChannelListingsPage'
 import { ShipmentsPage } from './pages/ShipmentsPage'
+import { VentasPage } from './pages/VentasPage'
 import { ComingSoonPage } from './pages/ComingSoonPage'
 import { UsuariosPage } from './pages/UsuariosPage'
 import { PromptsAIPage } from './pages/PromptsAIPage'
@@ -65,7 +66,7 @@ export default function App() {
         <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/inventory/mercadolibre" element={<ChannelListingsPage platform="ml" />} />
         <Route path="/inventory/tiendanube" element={<ChannelListingsPage platform="tn" />} />
-        <Route path="/ventas" element={<RequireBusiness><ComingSoonPage title="Ventas" icon="ventas" /></RequireBusiness>} />
+        <Route path="/ventas" element={<RequireBusiness><VentasPage /></RequireBusiness>} />
         <Route path="/envios" element={<ComingSoonPage title="Envios" icon="envios" />} />
         <Route path="/envios/mercadolibre" element={<ShipmentsPage />} />
         <Route path="/envios/tiendanube" element={<ComingSoonPage title="Envios · Tienda Nube" icon="tn" />} />

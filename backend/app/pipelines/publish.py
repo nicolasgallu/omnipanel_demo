@@ -1,9 +1,5 @@
-import asyncio
-from app.integrations.core.ai_completation import ai_call_prepublish
-from app.integrations.mercadolibre.grid_size import create_template, create_grid
-from app.integrations.mercadolibre.product_handler import prepublish, publish as meli_publish, update as meli_update, pause as meli_pause, delete as meli_delete
-from app.integrations.tiendanube.product_handler import create_categories, publish as tnube_publish, update as tnube_update, delete as tnube_delete
-from app.integrations.mercadolibre.ai_images import meli_ai_pictures
+from app.integrations.mercadolibre.product_handler import publish as meli_publish, update as meli_update, pause as meli_pause, delete as meli_delete
+from app.integrations.tiendanube.product_handler import publish as tnube_publish, update as tnube_update, delete as tnube_delete
 from app.integrations.mercadolibre.cost_calculator import calculate_cost
 from app.utils.logger import logger
 
@@ -12,27 +8,8 @@ def pipeline_publish(payload):
     target = payload.get('target')
     event_type = payload.get('event_type')
     logger.info(f"Event: {event_type} | Target: {target}")
-    
-    if event_type == 'prepublish':
-        # DEPRECATED (28/09): el flujo prepublish del webhook interno quedó
-        # reemplazado por la REST API del dashboard:
-        #   - IA: POST /api/inventory/products/{id}/prepublish
-        #   - settings de categoría: POST /api/mercadolibre/configure
-        # Se mantiene funcional durante el período de prueba del usuario;
-        # si todo sigue OK se elimina junto con prepublish()/
-        # _generate_category_options/ai_call_prepublish.
-        logger.warning(
-            "DEPRECATED: prepublish event received via webhook (product %s). "
-            "Este flujo será eliminado; usá la REST API del dashboard.",
-            payload.get("product_id"),
-        )
-        asyncio.run(ai_call_prepublish(payload))
-        if target == "mercadolibre":
-            prepublish(payload)
-        elif target == "tiendanube":
-            create_categories(payload)
 
-    elif event_type == 'publish':
+    if event_type == 'publish':
         if target == "mercadolibre":
             # Only refresh costs when the item actually exists (publish
             # succeeded or was already published) — never after a failure.
@@ -60,37 +37,6 @@ def pipeline_publish(payload):
         elif target == "tiendanube":
             tnube_delete(payload)
 
-    elif event_type == 'meli_pictures':
-        # DEPRECATED (28/09): solo alcanzable vía webhook interno. El dashboard
-        # descarga las fotos con POST /api/mercadolibre/pictures (channels.py).
-        logger.warning(
-            "DEPRECATED: meli_pictures event received via webhook (product %s). "
-            "Será eliminado.",
-            payload.get("product_id"),
-        )
-        meli_ai_pictures(payload)
-
-    elif event_type == "create_template":
-        # DEPRECATED (28/09): solo alcanzable vía webhook interno; no hay flujo
-        # equivalente en el dashboard.
-        logger.warning(
-            "DEPRECATED: create_template event received via webhook (product %s). "
-            "Será eliminado.",
-            payload.get("product_id"),
-        )
-        create_template(payload)
-        tnube_update(payload)
-        
-    elif event_type == "create_size_grid":
-        # DEPRECATED (28/09): solo alcanzable vía webhook interno; no hay flujo
-        # equivalente en el dashboard.
-        logger.warning(
-            "DEPRECATED: create_size_grid event received via webhook (product %s). "
-            "Será eliminado.",
-            payload.get("product_id"),
-        )
-        create_grid(payload)
-                
     else:
         return
 

@@ -128,6 +128,19 @@ DEFAULT_PROMPT_SETTINGS = {
     "reply_audit_enabled": 1,
 }
 
+# Defaults del sistema por columna de ai.prompts: los mismos textos que usa la
+# IA (prepublish + mensajería). El GET los devuelve cuando la DB está vacía.
+from app.pipelines.messages import DEFAULT_MESSAGE_PROMPTS  # noqa: E402
+from app.service.prompt_defaults import PREPUBLISH_SYS_DEFAULTS  # noqa: E402
+
+_PROMPT_DEFAULTS = {
+    "ai_generate_title": PREPUBLISH_SYS_DEFAULTS["title"],
+    "ai_generate_description": PREPUBLISH_SYS_DEFAULTS["description"],
+    "ai_generate_brand": PREPUBLISH_SYS_DEFAULTS["brand"],
+    "ai_generate_model": PREPUBLISH_SYS_DEFAULTS["model"],
+}
+_PROMPT_DEFAULTS.update(DEFAULT_MESSAGE_PROMPTS)
+
 
 def _prompt_settings(row):
     """Settings de respuestas en el vocabulario del front (0-100, bool)."""
@@ -174,17 +187,27 @@ def _validate_prompt_settings(settings):
 
 
 def _prompts_payload(business_id):
-    """Payload JSON de /api/ai/prompts (cacheable, sin request context)."""
+    """Payload JSON de /api/ai/prompts (cacheable, sin request context).
+
+    Los campos vacíos se devuelven con los DEFAULTS del sistema (los mismos
+    que usa la IA): el front muestra exactamente lo que la IA va a usar, sin
+    textos propios hardcodeados."""
     try:
         row = get_one("SELECT * FROM " + PROMPTS_TABLE
                       + " WHERE business_id = :b", {"b": business_id})
     except LookupError:
-        return {"prompts": {}, "settings": _prompt_settings(None),
-                "supported": PROMPT_KEYS, "message":
-                "Sin prompts guardados para tu negocio"}
-    prompts = {k: row.get(PROMPT_ALIASES.get(k, k)) for k in PROMPT_KEYS}
-    return {"prompts": prompts, "settings": _prompt_settings(row),
-            "supported": PROMPT_KEYS}
+        row = {}
+
+    prompts = {}
+    for k in PROMPT_KEYS:
+        column = PROMPT_ALIASES.get(k, k)
+        prompts[k] = (row.get(column) or _PROMPT_DEFAULTS.get(column) or "")
+    payload = {"prompts": prompts, "settings": _prompt_settings(row or None),
+               "supported": PROMPT_KEYS}
+    if not row:
+        payload["message"] = ("Sin prompts guardados para tu negocio: se "
+                              "muestran los defaults del sistema.")
+    return payload
 
 
 @admin_bp.route("/ai/prompts", methods=["GET"])
@@ -386,6 +409,8 @@ def get_stock_sync():
     return jsonify({
         "provider": ss.get("provider", "none"),
         "config": ss.get("config") or {},
+        # Momento en que una venta descuenta stock (aplica a cualquier IMS).
+        "trigger": ss.get("trigger", "paid"),
     })
 
 
@@ -397,7 +422,15 @@ def put_stock_sync():
     if err is not None:
         return err
     _, config = _business_config()
-    config["stock_sync"] = {"provider": provider, "config": cfg}
+    # El trigger es una preferencia aparte: si el POST no lo trae, se preserva.
+    trigger = str((request.get_json(silent=True) or {}).get("trigger") or "").strip()
+    if not trigger:
+        trigger = (config.get("stock_sync") or {}).get("trigger", "paid")
+    if trigger not in ("paid", "confirmed"):
+        return jsonify({"error": "bad_request",
+                        "message": "trigger debe ser 'paid' o 'confirmed'"}), 400
+    config["stock_sync"] = {"provider": provider, "config": cfg,
+                            "trigger": trigger}
     execute("UPDATE " + BUSINESSES_TABLE + " SET config = :config WHERE id = :b",
             {"config": json.dumps(config, ensure_ascii=False),
              "b": current_business_id()})
@@ -405,6 +438,27 @@ def put_stock_sync():
     logger.info("IMS stock_sync updated for business %s: provider=%s",
                 current_business_id(), provider)
     return jsonify({"status": "ok"})
+
+
+@admin_bp.route("/settings/stock-sync/trigger", methods=["PATCH"])
+@require_auth
+@require_business
+def patch_stock_sync_trigger():
+    """Setea SOLO el momento de descuento de stock ('paid' | 'confirmed')."""
+    trigger = str((request.get_json(silent=True) or {}).get("trigger") or "").strip()
+    if trigger not in ("paid", "confirmed"):
+        return jsonify({"error": "bad_request",
+                        "message": "trigger debe ser 'paid' o 'confirmed'"}), 400
+    _, config = _business_config()
+    config.setdefault("stock_sync", {})
+    config["stock_sync"]["trigger"] = trigger
+    execute("UPDATE " + BUSINESSES_TABLE + " SET config = :config WHERE id = :b",
+            {"config": json.dumps(config, ensure_ascii=False),
+             "b": current_business_id()})
+    cache.invalidate_business(current_business_id())  # post-escritura (ver cache.py)
+    logger.info("IMS stock_sync.trigger updated for business %s: %s",
+                current_business_id(), trigger)
+    return jsonify({"status": "ok", "trigger": trigger})
 
 
 @admin_bp.route("/settings/stock-sync/test", methods=["POST"])

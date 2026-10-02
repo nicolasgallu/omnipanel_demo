@@ -116,16 +116,17 @@ export function EditableCell({
   useEffect(() => {
     if (mode === 'edit') inputRef.current?.focus()
   }, [mode])
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (mode === 'idle') {
       setCommitted(value)
       setDraft(value)
     }
+    // Intencional: sincroniza SOLO cuando cambia `value` (no al entrar/salir
+    // de edición, para no pisar el draft del usuario).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
 
   // Entrar / salir del modo edición junto con la fila.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (rowActive) {
       setDraft(committed)
@@ -134,10 +135,11 @@ export function EditableCell({
     } else {
       setMode((m) => (m === 'edit' || m === 'error' ? 'idle' : m))
     }
+    // Intencional: solo al togglear rowActive (no en cada cambio de committed).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowActive])
 
   // Commit / cancel en conjunto disparados por la barra de la fila.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!rowActive) {
       savedTick.current = rowEdit.saveTick
@@ -147,8 +149,10 @@ export function EditableCell({
       savedTick.current = rowEdit.saveTick
       void commit()
     }
+    // Intencional: patrón tick/ref — commit es de la render actual cuando
+    // cambia el tick (agregarlo a las deps correría el efecto en cada render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowEdit.saveTick])
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!rowActive) {
       cancelledTick.current = rowEdit.cancelTick
@@ -158,6 +162,8 @@ export function EditableCell({
       cancelledTick.current = rowEdit.cancelTick
       cancel()
     }
+    // Intencional: mismo patrón tick/ref que el commit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rowEdit.cancelTick])
 
   const stop = (e: React.SyntheticEvent) => e.stopPropagation()

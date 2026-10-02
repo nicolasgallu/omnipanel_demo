@@ -18,9 +18,7 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
   `./run-native.sh` = sin docker. La DB la elige `DB_HOST` en `backend/.env`
   (seteado → MySQL local; vacío → connector Cloud SQL). Re-seed:
   `docker compose down -v && ./run.sh`. Regenerar el dump: `backend/scripts/export_seed.sh`.
-- Webhooks (HMAC, no tocar su contrato):
-  - `backend/app/api/publish_event.py` → `/webhooks/publications` (prepublish/publish/update/pause/delete para ML y TN, firmado con `webhook_secret` del business). **DEPRECADO en prueba (28/09)** — ver Pendientes.
-  - `backend/app/api/images_event.py` → `/webhooks/images` (PNG base64 → GCS → DB). **DEPRECADO en prueba (28/09)** — ver Pendientes.
+- Webhooks (no tocar su contrato):
   - `backend/app/webhook/meli_dispatcher.py` → `/webhooks/meli` (una URL para todos los topics de Meli: inbox en `events` + ruteo por `topic` vía `registry.py`). El inbox SIEMPRE queda inline (antes del 200); los handlers pesados del registry se encolan vía `backend/app/tasks.py` (Cloud Tasks en prod, stub en memoria en dev/tests). `orders_v2` y `items` siguen inline.
   - `backend/app/webhook/task_worker.py` → `/internal/tasks/webhook` (worker de Cloud Tasks: OIDC en prod, corre el handler del topic; 200 ok / 500 reintento). Guía de setup: `backend/docs/cloud_tasks_setup.md`.
   - `backend/app/webhook/registry.py` → `{platform: {topic: handler}}` (nuevo platform = nuevo módulo + una entrada).
@@ -49,8 +47,10 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
 3. **Actores en `events`**: webhooks validan con `resolve_actor` (business o
    employee activo del mismo business; default = business). Eventos de sistema
    (orders, item status) = NULL. Acciones del dashboard van con `source="dashboard"`.
-4. **Webhooks = HMAC por business** (header `X-Signature`, secret de
-   `platform_accounts.businesses`). Los webhooks NO usan tokens de usuario.
+4. **Webhooks NO usan tokens de usuario**: Meli identifica la cuenta por el
+   `user_id` del payload (via `get_account_owner`); Tiendanube por `store_id`.
+   El HMAC de TN sigue siendo stub (siempre True) hasta que exista el app
+   secret; el worker de Cloud Tasks usa OIDC de servicio (no tokens de negocio).
 5. **Roles**: Ventas / Usuarios / Configuración son SOLO `business`. Backend:
    `@require_auth` + `@require_business` (403 a empleados). Front:
    `usePermissions()` + `<RequireBusiness>` + `businessOnly` en el NAV.
@@ -68,22 +68,70 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
 
 ## Convenciones
 
+- **Docs primero (regla anti shape-mismatch)**: antes de escribir código que
+  consuma CUALQUIER endpoint externo (webhook/topic nuevo, GET/POST/PUT a
+  MercadoLibre, Tiendanube u otra plataforma), releer SIEMPRE la documentación
+  oficial de ese endpoint y citar la URL de la fuente en el comentario o el
+  commit — nunca asumir la forma del JSON por el nombre de los campos ni por
+  código previo. Si la doc no se puede leer por cualquier motivo: PARAR y
+  preguntarle al usuario (que la provee) antes de continuar.
 - **Simplicidad**: sin sobre-ingeniería. Patrones existentes del repo antes que
   frameworks nuevos. Cambios chicos y legibles.
 - **Mensajes al usuario en español**, forma `{"error": "<code>", "message": "<texto>"}`.
 - **Logs**: cada línea lleva `[event=N]` (correlación). Los entrypoints de
   webhooks hacen `set_event_id(None)` al inicio y `set_event_id(event_id)`
   tras el claim. Usar `logger.exception` en fallos.
-- **Payload interno** (publications/images): `{id: uuid, source: "internal",
-  target, account_id, event_type, product_id, actor_role?, actor_id?}`.
 - **Tests**: `cd backend && .venv/bin/pytest tests/`
-  (92 tests, self-provisioning: andan sobre cualquier DB vacía; fixtures
+  (283 tests, self-provisioning: andan sobre cualquier DB vacía; fixtures
   scratch_business/employee/product con auto-cleanup). Corren contra el MySQL
   LOCAL (`DB_HOST` en `.env`), rápido — no usan Cloud SQL. NUNCA disparar
-  WhatsApp real en tests (stub de `enviar_mensaje_whapi`). Todo verde (27/09/2026).
+  WhatsApp real en tests (stub de `enviar_mensaje_whapi`). Todo verde (29/09/2026).
 
 ## Pendientes conocidos
 
+- **RESUELTO 02/10 — Shape-mismatch de handlers Meli (auditoría + docs)**: los
+  handlers de topics guardaban campos vacíos por leer la respuesta de Meli con
+  la forma equivocada. Corregido contra doc oficial (regla nueva: "Docs
+  primero" en Convenciones): `questions` (respuesta PLANA `{text,status,from}` +
+  nickname vía `GET /users/{id}`), `price_suggestions` (`current_price`/
+  `suggested_price` son objetos `{amount,usd_amount}`), `handle_competition`
+  (`current_price` top-level existe), `promotions` (`status` es objeto
+  `{"id":...}` y la llamada usa `app_version=v2`), `claims` (la orden es
+  `resource_id` con `resource=="order"`), `invoices` (orden en
+  `items[].external_order_id`), `cost_calculator` (`/sites/MLA/listing_prices`
+  devuelve LISTA — el cálculo de costos fallaba silencioso y nunca persistía;
+  `fee_tax` no existe en la API, siempre default 21%). También: guards de
+  `reply_status` tratan `''` como "sin procesar" (defaults viejos de Cloud
+  SQL). Pendiente de verificar contra doc: `payments` (`order_id` de
+  `/collections/{id}` y vigencia del endpoint).
+- **IMPLEMENTADO 02/10 — Panel de ventas (workflow de órdenes ML/TN)**: las
+  tablas `mercadolibre.orders`/`tiendanube.orders` ganaron columnas
+  normalizadas (`channel_status`, `status_history` append-only, `buyer_name`,
+  `buyer_external_id`, `total`, `currency`, `date_created`, `link`;
+  `tiendanube.orders` además `payment_status`; ALTER para Cloud SQL documentado
+  en `backend_tables.md`). `app/integrations/core/order_records.py`:
+  `record_order` registra TODA orden en el webhook (cualquier estado, antes del
+  filtro) con historia de estados dedupeada por `key` (raw en ML,
+  `raw|payment_status` en TN). Trigger GLOBAL de descuento de stock:
+  `businesses.config.stock_sync.trigger` = `paid` (default) | `confirmed` —
+  la venta se dispara en `paid` o desde `confirmed`/`open` según config; la
+  reversa SIEMPRE en `cancelled`/`voided`/`refunded`. La máquina de `sells.py`
+  NO cambió (sigue leyendo `orders.status` como venta hecha/cancelada; el
+  estado real vive en `channel_status`+`status_history`). API nueva
+  `GET /api/sales/orders` (contrato final 02/10: page 0-based, `counts` sin
+  filtro de status, ítems con `stock_transactions` (sale/return + comprobante)
+  e `history` embebidos, estados `pending_payment|paid|delivered|cancelled` y
+  sync `synced|pending|error|not_applicable` — sin `reverted`, que ahora se
+  muestra como `synced`; + detalle `/<platform>/<order_id>`),
+  `GET /api/sales/report` (cards + serie diaria por tz Argentina;
+  `days=7|30|90&channel=`) y trigger IMS en `/api/settings/stock-sync`
+  (`trigger` en GET, preservado en POST, `PATCH /settings/stock-sync/trigger`).
+  Front: página `/ventas` real (port del Figma) con tabs Órdenes|Reportes en
+  `frontend/src/pages/VentasPage.tsx` + `features/sales/*` +
+  `components/{ListingColumnManager,StatStrip}.tsx`, y picker "Sincronización
+  de ventas" en `ImsSettings.tsx` (API real, sin localStorage). Pendiente del
+  usuario: correr el ALTER en Cloud SQL. Spec:
+  `backend/docs/sales_panel_plan.md` (§12 con el contrato final).
 - **IMPLEMENTADO 29/09 — Panel de plataforma**: tabla `platform_accounts.admins`
   (token salt propio `omnipanel-admin-auth-v1`, `require_admin`) + endpoints
   `/api/platform/*` (login, businesses listar/crear/activar-desactivar,
@@ -95,21 +143,30 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
   Admin seed: admin@guiaslocales.com (password entregada al usuario, cambiable
   con `PATCH /api/platform/password`). Pendiente: el front del panel (lo
   desarrolla el usuario aparte con el contrato de /api/platform).
-- **DEPRECADO 28/09 (en prueba, completo)**: los dos webhooks internos
-  `/webhooks/publications` (todos los event types: prepublish/publish/update/
-  pause/delete ML+TN) y `/webhooks/images` (create/delete), más las ramas
-  webhook-only del pipeline (`meli_pictures` → `ai_images.py`,
-  `create_template`/`create_size_grid` → `grid_size.py`). Reemplazados por la
-  REST API del dashboard: IA en `POST /api/inventory/products/{id}/prepublish`,
-  settings de categoría en `POST /api/mercadolibre/configure`, acciones
-  publish/update/pause/delete en `channels.py` (llama `pipeline_publish`
-  directo — **esas ramas NO se deprecan**), fotos en
-  `POST /api/mercadolibre/pictures` e imágenes en `/api/inventory/products/{id}/images`.
-  Todo el código viejo sigue funcional y loguea un warning `DEPRECATED` si se
-  invoca; el usuario lo testea en la app y, si todo OK, se elimina. Incluye la
-  columna `mercadolibre.attributes.category_options` (solo la leen `prepublish`
-  y `create_template`): se dropea en la misma pasada que elimine esos flujos,
-  nunca antes (el código viejo aún escribe en ella).
+- **ELIMINADO 29/09 — flujos webhook deprecados**: se eliminaron los webhooks
+  internos `/webhooks/publications` y `/webhooks/images` (`publish_event.py`,
+  `images_event.py`), las ramas webhook-only del pipeline (`meli_pictures` →
+  `ai_images.py`, `create_template`/`create_size_grid` → `grid_size.py`),
+  `prepublish()`/`_generate_category_options()` de `product_handler.py` y
+  `ai_completation.py`. El dashboard quedó 100% en la REST API
+  (`channels.py`/`inventory.py`); los tests del pipeline se migraron a llamadas
+  directas a `pipeline_publish`.
+- **IMPLEMENTADO 29/09 — Guía de talles (size grid, domain-driven)**: categorías
+  que exigen SIZE_GRID_ID se resuelven automáticamente al publicar
+  (`app/integrations/mercadolibre/size_grid.py`, hook en `publish`): el spec
+  sale del template `technical_specs?section=grids` de cada dominio
+  (main_attribute = primer `main_attribute_candidate` —ropa: SIZE, calzado:
+  MANUFACTURER_SIZE—; equivalencias FILTRABLE_SIZE solo si existen; medidas =
+  atributos `required` `number_unit` sin `grid_filter`, de un solo tipo de
+  medida). Reusa la guía cacheada en `mercadolibre.size_grids` por (cuenta,
+  dominio, marca, género) o la CREA (`POST /catalog/charts`; nombre sin "_",
+  máx 60 chars, reintento por colisión). El wizard muestra el talle + las
+  medidas requeridas (`GET /api/mercadolibre/size-grid/measures`) y manda las
+  medidas en `config.attributes` (de ahí las lee el resolver). Validado contra
+  Meli real en vestidos, zapatillas, pantalones, camisas, calzas, shorts,
+  pijamas, camperas, buzos y remeras; los gorros no exigen grilla (sin
+  SIZE_GRID_ID). Se dropeó `mercadolibre.attributes.category_options` y
+  `mercadolibre.size_grid`; se creó `mercadolibre.size_grids`.
 - **RESUELTO 28/09**: delete de ML robusto ante moderación de Meli — hace GET
   del item primero (404 → limpia la fila), saltea el PUT `closed` si ya está
   `closed`/`inactive`, y trata `item.status.not_modifiable` como "ya cerrado"
@@ -183,9 +240,9 @@ cd frontend && pnpm dev         # o VITE_USE_MOCK=1 pnpm dev (sin backend)
 cd frontend && pnpm test
 ```
 
-Firmar un webhook de prueba: HMAC-SHA256 del body crudo con el
-`webhook_secret` del business (tabla `platform_accounts.businesses`), header
-`X-Signature`, body con `id` (uuid) y `source="internal"`.
+Probar el webhook de Meli en local: `POST /webhooks/meli` con
+`{"topic": "...", "user_id": <external_account_id>, "resource": "...", "_id": "..."}`
+(sin HMAC; el dedup es por `_id` y el inbox queda en `platform_accounts.events`).
 
 ## Deploy (plan, aún sin implementar)
 

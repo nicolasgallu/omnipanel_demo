@@ -209,7 +209,7 @@ export function TNChannelPanel({
     } finally {
       setLoading(false)
     }
-  }, [loading, account, tnCfg, edited, product.id, onChanged, onReload])
+  }, [loading, account, tnCfg, edited, steps.length, product.id, product.price, priceValue, onChanged, onReload])
 
   const editConfig = useCallback(() => {
     setEdited(true)

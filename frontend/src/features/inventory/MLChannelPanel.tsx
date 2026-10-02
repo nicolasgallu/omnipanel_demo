@@ -12,6 +12,7 @@ import type {
   MLSettingsItem,
   Product,
   ProductListing,
+  SizeGridMeasure,
 } from '../../lib/api/types'
 import { ConfirmDialog, ErrorBox, Spinner, Toggle } from '../../components/ui'
 import {
@@ -173,6 +174,12 @@ export function MLChannelPanel({
   const [showTracker, setShowTracker] = useState(!settledInit)
   const [prepublishedView, setPrepublishedView] = useState(listing?.status === 'prepublished')
   const [settings, setSettings] = useState<MLSettings | null>(null)
+  // Guía de talles: la categoría la exige (SIZE_GRID_ID en sus settings) y el
+  // publish la resuelve automáticamente; el wizard muestra el talle + estas
+  // medidas numéricas (las manda en config.attributes como cualquier atributo).
+  const [sizeGridRequired, setSizeGridRequired] = useState(false)
+  // null = requisitos todavía no cargados; [] = sin medidas que completar.
+  const [sizeGridMeasures, setSizeGridMeasures] = useState<SizeGridMeasure[] | null>(null)
   // Categoría que ya tenía guardada el producto (solo fallback: no se usa para
   // auto-seleccionar ni auto-avanzar — la elige siempre el usuario).
   const [savedCategoryId, setSavedCategoryId] = useState<string | null>(null)
@@ -281,6 +288,7 @@ export function MLChannelPanel({
         setSettings(res)
         setSavedCategoryId(res.category_id)
         setMlCfg(mlCfgFromSettings(res))
+        setSizeGridRequired(Boolean(res.size_grid_required))
         // No forzamos setStep(1) acá: para productos ya publicados /
         // pre-publicados hay que mantener la vista de publicado; el paso
         // inicial ya se calculó al montar el panel.
@@ -291,11 +299,32 @@ export function MLChannelPanel({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product.id, account])
 
-  // Campaign options (for the picker and the config summary).
+  // Guía de talles: cuando la categoría la exige y el género ya está elegido,
+  // cargamos las medidas requeridas del dominio (technical_specs de Meli).
   const effectiveCategory = categoryId ?? savedCategoryId
+  useEffect(() => {
+    if (!sizeGridRequired || !effectiveCategory || account === null || account === undefined) return
+    const gender = (mlCfg.values.GENDER ?? '').trim()
+    if (!gender) {
+      setSizeGridMeasures([])
+      return
+    }
+    let cancelled = false
+    setSizeGridMeasures(null)
+    channelsApi
+      .mlSizeGridMeasures(product.id, account.id, gender)
+      .then((res) => {
+        if (!cancelled) setSizeGridMeasures(res.measures ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setSizeGridMeasures([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sizeGridRequired, effectiveCategory, account, product.id, mlCfg.values.GENDER])
   useEffect(() => {
     if (!effectiveCategory || account === null || account === undefined) return
     let cancelled = false
@@ -336,6 +365,13 @@ export function MLChannelPanel({
       // cargados en user_input_value: re-seedear el estado del wizard para
       // que esos valores aparezcan seleccionados en los campos.
       setMlCfg(mlCfgFromSettings(res))
+      // La categoría recién confirmada puede exigir (o no) guía de talles.
+      // El prefill solo corre al montar el panel (con la categoría anterior),
+      // así que el flag se recalcula acá para que la sección "Guía de talles"
+      // aparezca/desaparezca al confirmar la categoría.
+      setSizeGridRequired(
+        sectionItems(res, 'attributes').some((i) => i.id === 'SIZE_GRID_ID'),
+      )
 
       // La ficha elegida era de la categoría anterior: se descarta SOLO si la
       // categoría cambió de verdad. Reconfirmar la misma categoría mantiene
@@ -393,6 +429,11 @@ export function MLChannelPanel({
         await channelsApi.mlPrice(product.id, account.id, parsedPrice || product.price)
       }
 
+      // Modo catálogo activo (recalculado acá: evita depender de un const
+      // declarado más abajo en el componente).
+      const catalogActive =
+        pubMode === 'catalog' && (catalogMatch !== null || (edited && Boolean(listing?.catalog_listing)))
+
       // Catálogo: sin attributes (la ficha es de Meli) y, al publicar, con el
       // catalog_product_id elegido en el matching. Al editar un item ya
       // vinculado, el backend hace el update mínimo (precio/stock).
@@ -400,7 +441,7 @@ export function MLChannelPanel({
         ? {
             category_id: (categoryId ?? savedCategoryId) ?? undefined,
             listing_type: mlCfg.listing_type,
-            catalog_product_id: !edited && catalogMatch ? catalogMatch.id : undefined,
+            catalog_product_id: catalogMatch ? catalogMatch.id : undefined,
             // Los atributos catalog_required (ej. "Tipo de mochila") se mandan
             // también en catálogo: Meli los exige igual.
             attributes: mlCfg.values,
@@ -476,8 +517,8 @@ export function MLChannelPanel({
       setLoading(false)
     }
   }, [loading, account, mlCfg, categoryId, savedCategoryId, edited, hasMeliItem,
-      pubMode, catalogMatch, priceValue, listing,
-      product.id, onChanged, onReload])
+      pubMode, catalogMatch, priceValue, listing, steps.length,
+      product.id, product.price, onChanged, onReload])
 
   // Costos de venta: snapshot real de mercadolibre.selling_costs.
   useEffect(() => {
@@ -696,24 +737,24 @@ export function MLChannelPanel({
       )}
 
       {isActive && step === configStep && (catalogActive ? (
-        <>
-          <MLCatalogConfigStep
-            product={product}
-            match={catalogMatch}
-            cfg={{ listing_type: mlCfg.listing_type }}
-            set={(_, v) => setMl('listing_type', v)}
-            listingTypes={listingTypes}
-            listingTypesError={listingTypesError}
-            onRetryListingTypes={() => setListingTypesKey((k) => k + 1)}
-            priceValue={priceValue}
-            onPriceChange={setPriceValue}
-          />
-          <CatalogRequiredAttributes
-            settings={settings}
-            values={mlCfg.values}
-            setValue={setMlValue}
-          />
-        </>
+        <MLCatalogConfigStep
+          product={product}
+          match={catalogMatch}
+          cfg={{ listing_type: mlCfg.listing_type }}
+          set={(_, v) => setMl('listing_type', v)}
+          listingTypes={listingTypes}
+          listingTypesError={listingTypesError}
+          onRetryListingTypes={() => setListingTypesKey((k) => k + 1)}
+          priceValue={priceValue}
+          onPriceChange={setPriceValue}
+          beforeReadonly={
+            <CatalogRequiredAttributes
+              settings={settings}
+              values={mlCfg.values}
+              setValue={setMlValue}
+            />
+          }
+        />
       ) : (
         <MLConfigStep
           cfg={mlCfg}
@@ -726,6 +767,8 @@ export function MLChannelPanel({
           accent={ACCENT}
           priceValue={priceValue}
           onPriceChange={setPriceValue}
+          sizeGridRequired={sizeGridRequired}
+          sizeGridMeasures={sizeGridMeasures}
         />
       ))}
 
@@ -1153,7 +1196,7 @@ function CatalogRequiredAttributes({
   )
   if (items.length === 0) return null
   return (
-    <div className="flex flex-col gap-2 mt-2">
+    <div className="flex flex-col gap-2">
       <SectionLabel>Atributos de la categoría</SectionLabel>
       <div className="grid grid-cols-2 gap-2">
         {items.map((item) => (
@@ -1180,6 +1223,8 @@ function MLConfigStep({
   accent,
   priceValue,
   onPriceChange,
+  sizeGridRequired,
+  sizeGridMeasures,
 }: {
   cfg: MLCfgState
   set: <K extends keyof MLCfgState>(k: K, v: MLCfgState[K]) => void
@@ -1191,9 +1236,34 @@ function MLConfigStep({
   accent: string
   priceValue?: string
   onPriceChange?: (v: string) => void
+  sizeGridRequired?: boolean
+  sizeGridMeasures?: SizeGridMeasure[] | null
 }) {
   // Dinámico: renderizamos los items tal como vienen de Meli en los settings
   // de la categoría. Cada categoría/producto puede traer atributos distintos.
+  const renderSection = (section: SectionKey) => {
+    const items = sectionItems(settings, section).filter(
+      (i) => i.id !== 'LISTING_TYPE'
+        && i.id !== 'SIZE_GRID_ID'
+        && i.id !== 'SIZE_GRID_ROW_ID')
+    if (items.length === 0) return null
+    return (
+      <div key={section} className="flex flex-col gap-2">
+        <SectionLabel>{SECTION_LABELS[section]}</SectionLabel>
+        <div className="grid grid-cols-2 gap-2">
+          {items.map((item) => (
+            <AttributeCard
+              key={item.id}
+              item={item}
+              value={cfg.values[item.id] ?? ''}
+              onChange={(v) => setValue(item.id, v)}
+            />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-5 animate-fade-up">
       {priceValue !== undefined && onPriceChange && (
@@ -1215,25 +1285,42 @@ function MLConfigStep({
           <span className="text-xs text-faint">Si lo dejás vacío se usa el precio del inventario.</span>
         </div>
       )}
-      {(['attributes', 'shipping', 'sale_terms'] as const).map((section) => {
-        const items = sectionItems(settings, section).filter((i) => i.id !== 'LISTING_TYPE')
-        if (items.length === 0) return null
-        return (
-          <div key={section} className="flex flex-col gap-2">
-            <SectionLabel>{SECTION_LABELS[section]}</SectionLabel>
-            <div className="grid grid-cols-2 gap-2">
-              {items.map((item) => (
-                <AttributeCard
-                  key={item.id}
-                  item={item}
-                  value={cfg.values[item.id] ?? ''}
-                  onChange={(v) => setValue(item.id, v)}
-                />
-              ))}
-            </div>
-          </div>
-        )
-      })}
+      {renderSection('attributes')}
+
+      {sizeGridRequired && (
+        <div className="flex flex-col gap-2">
+          <SectionLabel>Guía de talles</SectionLabel>
+          {sizeGridMeasures === null ? (
+            <span className="text-xs text-faint">Cargando requisitos de la guía…</span>
+          ) : (
+            <>
+              <span className="text-xs text-faint">
+                La guía de talles se resuelve automáticamente al publicar con estas medidas.
+              </span>
+              {(sizeGridMeasures ?? []).length > 0 && (
+                <div className="grid grid-cols-2 gap-2">
+                  {(sizeGridMeasures ?? []).map((m) => (
+                    <AttributeCard
+                      key={m.id}
+                      item={{
+                        id: m.id,
+                        name: m.name + ' (' + m.unit + ')',
+                        value_type: 'string',
+                        required: true,
+                      }}
+                      value={cfg.values[m.id] ?? ''}
+                      onChange={(v) => setValue(m.id, v)}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {renderSection('shipping')}
+      {renderSection('sale_terms')}
 
       <div className="flex flex-col gap-2">
         <SectionLabel>{SECTION_LABELS.listing}</SectionLabel>

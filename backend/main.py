@@ -10,13 +10,12 @@ from app.api.ai import ai_bp
 from app.api.auth import auth_bp
 from app.api.channels import channels_bp
 from app.api.credentials import credentials_bp
-from app.api.images_event import images
 from app.api.inventory import inventory_bp
 from app.api.messages_api import messages_api_bp
 from app.api.notifications_api import notifications_bp
 from app.api.oauth import oauth_bp
 from app.api.platform_admin import platform_bp
-from app.api.publish_event import publications
+from app.api.sales import sales_bp
 from app.api.support import support_bp
 from app.settings.config import CORS_ORIGIN
 from app.utils.logger import set_event_id
@@ -31,8 +30,6 @@ def create_app():
     app.json.ensure_ascii = False
 
     # Webhooks (existing)
-    app.register_blueprint(images)
-    app.register_blueprint(publications)
     app.register_blueprint(sells)
     app.register_blueprint(item_status)
     app.register_blueprint(meli)
@@ -48,6 +45,7 @@ def create_app():
     app.register_blueprint(credentials_bp)
     app.register_blueprint(oauth_bp)
     app.register_blueprint(support_bp)
+    app.register_blueprint(sales_bp)
     app.register_blueprint(notifications_bp)
     app.register_blueprint(messages_api_bp)
     # Panel de plataforma: admins gestionan businesses y cuentas.

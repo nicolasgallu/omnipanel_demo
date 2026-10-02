@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from "react";
-import omnipanelLogo from "./assets/omnipanel-logo.png";
+import omnipanelLogo from "./assets/omnipanel-lockup.png";
 
 // ─── Types & Data ─────────────────────────────────────────────────────────────
 
@@ -265,24 +265,6 @@ const FAIL_REASONS: Record<"ml" | "tn", Record<string, string>> = {
 };
 
 // ─── Atoms ────────────────────────────────────────────────────────────────────
-
-function Logo({ size = 26 }: { size?: number }) {
-  // Omnipanel mark: solid bright-blue disc with a thin white ring (open at the
-  // bottom) and white ascending bar-chart bars cut into the lower half.
-  const blue = "#1F4BFF";
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
-      <circle cx="16" cy="16" r="16" fill={blue} />
-      {/* Thin ring, open at the bottom where the bars rise */}
-      <path d="M11.9 19.2 A 7.2 7.2 0 1 1 19.1 19.2" stroke="white" strokeWidth="1.7" strokeLinecap="round" />
-      {/* Ascending bars */}
-      <rect x="9.6"  y="20"   width="2.6" height="5.5"  rx="1.3" fill="white" />
-      <rect x="13.1" y="15"   width="2.6" height="10.5" rx="1.3" fill="white" />
-      <rect x="16.6" y="11"   width="2.6" height="14.5" rx="1.3" fill="white" />
-      <rect x="20.1" y="17"   width="2.6" height="8.5"  rx="1.3" fill="white" />
-    </svg>
-  );
-}
 
 function ImgPlaceholder({ size = 36 }: { size?: number }) {
   return (
@@ -2426,8 +2408,8 @@ function Sidebar({ active, onActive }: { active: string; onActive: (s: string) =
   }, [active]);
   return (
     <aside className={`w-52 flex-col flex-shrink-0 bg-white ${active === "Preguntas" ? "hidden md:flex" : "flex"}`} style={{ borderRight: "1px solid #E2E8F0" }}>
-      <div className="flex items-center gap-2.5 px-5 py-5" style={{ borderBottom: "1px solid #F1F5F9" }}>
-        <img src={omnipanelLogo} alt="Omnipanel" className="h-6 w-auto" />
+      <div className="flex items-center gap-2.5 px-4 py-4" style={{ borderBottom: "1px solid #F1F5F9" }}>
+        <img src={omnipanelLogo} alt="Omnipanel" className="h-11 w-auto max-w-full" />
       </div>
       <nav className="flex flex-col gap-0.5 px-3 py-4 flex-1">
         {NAV.map(item => {
@@ -2968,6 +2950,7 @@ const scoreLevel = (s: number) => (s >= 80 ? "Óptimo" : s >= 50 ? "Estándar" :
 
 const matchesSearch = (p: Product, search: string) => (p.name_edited || p.name).toLowerCase().includes(search.toLowerCase());
 
+type ManagedCol = { key: string; label: string; locked?: boolean };
 type ListingCol = { key: string; label: string; locked?: boolean; editable?: boolean; render: (p: Product) => ReactNode };
 
 const ProductCell = (p: Product) => (
@@ -3378,9 +3361,9 @@ function ExportCsvButton({ scope, columns, rows }: { scope: ExportScope; columns
   );
 }
 
-function ListingColumnManager({ allCols, cols, setCols, defaultCols }: { allCols: ListingCol[]; cols: string[]; setCols: (c: string[]) => void; defaultCols: string[] }) {
+function ListingColumnManager({ allCols, cols, setCols, defaultCols }: { allCols: ManagedCol[]; cols: string[]; setCols: (c: string[]) => void; defaultCols: string[] }) {
   const [dragKey, setDragKey] = useState<string | null>(null);
-  const map = Object.fromEntries(allCols.map(c => [c.key, c])) as Record<string, ListingCol>;
+  const map = Object.fromEntries(allCols.map(c => [c.key, c])) as Record<string, ManagedCol>;
   const hidden = allCols.filter(c => !cols.includes(c.key));
 
   const reorder = (target: string) => {
@@ -4005,429 +3988,751 @@ function SupportFab() {
   );
 }
 
-// ─── Ventas · MercadoLibre (panel de analíticas) ────────────────────────────────
+// ─── Ventas (órdenes de MercadoLibre + Tienda Nube) ─────────────────────────────
+// Mismo patrón que Inventario/Envíos: header con buscador, strip de métricas, tabla
+// con columnas gestionables, paginación al pie y drawer lateral con el detalle.
 
-const fmt2 = (n: number) => `$ ${n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const fmtInt = (n: number) => n.toLocaleString("es-AR");
-
-type MlOrderStatus = "Pagada" | "Enviada" | "Cancelada";
-type MlOrder = {
-  id: string; pack: string | null; date: string; status: MlOrderStatus;
-  product: string; itemId: string; catId: string; condition: "Nuevo" | "Usado";
-  units: number; unitPrice: number; gross: number; commission: number;
-};
-
-// Deterministic pseudo-random so the demo data is stable across renders.
 function seeded(seed: number) {
   let s = seed % 2147483647;
   if (s <= 0) s += 2147483646;
   return () => (s = (s * 16807) % 2147483647) / 2147483647;
 }
 
-// Daily sales series across the last ~5 months (illustrative, with a few peaks).
-const SALES_SERIES = (() => {
-  const rand = seeded(20260424);
-  const start = new Date(2026, 3, 24); // 24/04
-  const days = 158;
-  const pts: { date: Date; value: number }[] = [];
-  for (let i = 0; i < days; i += 1) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    const base = 45000 + rand() * 55000;
-    const spike = rand() > 0.86 ? 130000 + rand() * 170000 : rand() > 0.6 ? 40000 + rand() * 60000 : 0;
-    pts.push({ date: d, value: Math.round(base + spike) });
+type SalesChannelKey = "ml" | "tn";
+type OrderStatus = "pending_payment" | "paid" | "delivered" | "cancelled";
+type StockSync = "synced" | "pending" | "error" | "not_applicable";
+type StockTxType = "sale" | "return";
+// Movimiento en el sistema de stock por ítem: venta (descuenta) o devolución (repone al cancelar).
+interface StockTransaction { type: StockTxType; status: Exclude<StockSync, "not_applicable">; document_number: string | null }
+interface SaleItem { title: string; sku: string; quantity: number; unit_price: number; stock_transactions: StockTransaction[] }
+interface SaleStatusEvent { at: string; status: OrderStatus; raw_status: string }
+interface SaleOrder {
+  id: string; number: string; channel: SalesChannelKey; created_at: string; updated_at: string;
+  buyer_name: string | null; items: SaleItem[]; total: number; currency: "ARS";
+  status: OrderStatus; stock_sync: StockSync; history: SaleStatusEvent[]; url: string;
+}
+
+const SALES_CHANNELS: Record<SalesChannelKey, { name: string; text: string; bg: string; border: string }> = {
+  ml: { name: "MercadoLibre", text: "#B45309", bg: "#FEF7E6", border: "#FDE68A" },
+  tn: { name: "Tienda Nube", text: "#4F46E5", bg: "#EEF2FF", border: "#C7D2FE" },
+};
+const ORDER_STATUS: Record<OrderStatus, { label: string; color: string; bg: string }> = {
+  pending_payment: { label: "Pendiente de pago", color: "#B45309", bg: "#FEF3C7" },
+  paid: { label: "Pagada", color: "#4F46E5", bg: "#EEF2FF" },
+  delivered: { label: "Entregada", color: "#16A34A", bg: "#DCFCE7" },
+  cancelled: { label: "Cancelada", color: "#DC2626", bg: "#FEE2E2" },
+};
+const STOCK_SYNC: Record<StockSync, { glyph: string; label: string; color: string; bg: string }> = {
+  synced: { glyph: "✓", label: "Sincronizado", color: "#16A34A", bg: "#DCFCE7" },
+  pending: { glyph: "⏳", label: "Pendiente", color: "#B45309", bg: "#FEF3C7" },
+  error: { glyph: "⚠", label: "Con error", color: "#DC2626", bg: "#FEE2E2" },
+  not_applicable: { glyph: "—", label: "No aplica", color: "#94A3B8", bg: "transparent" },
+};
+// Estado crudo que devuelve cada canal para cada estado normalizado.
+const RAW_STATUS: Record<SalesChannelKey, Record<OrderStatus, string>> = {
+  ml: { pending_payment: "payment_required", paid: "paid", delivered: "delivered", cancelled: "cancelled" },
+  tn: { pending_payment: "pending", paid: "paid", delivered: "closed", cancelled: "cancelled" },
+};
+
+const SALE_ORDERS: SaleOrder[] = (() => {
+  const rand = seeded(20261002);
+  const buyers = ["Martina Ríos", "Julián Paz", "Lucía Fernández", "Diego Sosa", "Sofía Medina", "Tomás Giménez", "Valentina López", "Mateo Castro", "Camila Bravo", "Agustín Vera", "Florencia Núñez", "Nicolás Herrera"];
+  const now = Date.now();
+  const out: SaleOrder[] = [];
+  let mlSeq = 2000018677825100, tnSeq = 10482, docSeq = 9420;
+  for (let i = 0; i < 620; i++) {
+    const channel: SalesChannelKey = rand() < 0.64 ? "ml" : "tn";
+    const created = now - (i * 3.45 + rand() * 3) * 3600000;
+    const nItems = rand() < 0.8 ? 1 : rand() < 0.7 ? 2 : 3;
+    const picked = [...products].sort(() => rand() - 0.5).slice(0, nItems);
+    const items: SaleItem[] = picked.map(p => ({ title: p.name_edited ?? p.name, sku: p.sku, quantity: rand() < 0.75 ? 1 : 2, unit_price: channel === "tn" ? Math.round(p.price * 0.95) : p.price, stock_transactions: [] }));
+    const total = items.reduce((a, it) => a + it.quantity * it.unit_price, 0);
+    const ageH = (now - created) / 3600000;
+    const r = rand();
+    const status: OrderStatus = r < 0.06 ? "cancelled" : ageH < 6 && r < 0.3 ? "pending_payment" : ageH < 72 ? "paid" : "delivered";
+    // Línea de tiempo coherente con el estado final.
+    const steps: OrderStatus[] = status === "pending_payment" ? ["pending_payment"]
+      : status === "cancelled" ? (rand() < 0.5 ? ["pending_payment", "cancelled"] : ["pending_payment", "paid", "cancelled"])
+      : status === "paid" ? ["pending_payment", "paid"] : ["pending_payment", "paid", "delivered"];
+    let t = created;
+    const history = steps.map((st, k) => { if (k) t += (st === "delivered" ? 40 + rand() * 50 : 0.1 + rand() * 2) * 3600000; return { at: new Date(Math.min(t, now)).toISOString(), status: st, raw_status: RAW_STATUS[channel][st] }; });
+    const wasPaid = steps.includes("paid");
+    if (wasPaid) items.forEach(it => {
+      const saleStatus = ageH < 0.5 ? "pending" : rand() < 0.04 ? "error" : "synced";
+      it.stock_transactions.push({ type: "sale", status: saleStatus, document_number: saleStatus === "synced" ? String(docSeq--) : null });
+      if (status === "cancelled" && saleStatus === "synced") {
+        const retStatus = rand() < 0.1 ? "pending" : "synced";
+        it.stock_transactions.push({ type: "return", status: retStatus, document_number: retStatus === "synced" ? String(docSeq--) : null });
+      }
+    });
+    const txs = items.flatMap(it => it.stock_transactions);
+    const stock_sync: StockSync = !txs.length ? "not_applicable" : txs.some(t => t.status === "error") ? "error" : txs.some(t => t.status === "pending") ? "pending" : "synced";
+    const number = channel === "ml" ? String(mlSeq -= 7 + Math.floor(rand() * 900)) : String(tnSeq--);
+    out.push({
+      id: `${channel}-${number}`, number, channel, created_at: new Date(created).toISOString(), updated_at: history[history.length - 1].at,
+      buyer_name: channel === "tn" && rand() < 0.08 ? null : buyers[Math.floor(rand() * buyers.length)],
+      items, total, currency: "ARS", status, stock_sync, history,
+      url: channel === "ml" ? `https://www.mercadolibre.com.ar/ventas/${number}/detalle` : `https://mitienda.mitiendanube.com/admin/orders/${number}`,
+    });
   }
-  return pts;
+  return out;
 })();
 
-const dm = (d: Date) => `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
-
-const SALES_TOTAL = SALES_SERIES.reduce((a, p) => a + p.value, 0);
-const ORDERS_TOTAL = 307;
-const UNITS_TOTAL = 444;
-const VENTAS_KPIS = {
-  gross: SALES_TOTAL,
-  net: Math.round(SALES_TOTAL * 0.8279),
-  ticket: Math.round((SALES_TOTAL / ORDERS_TOTAL) * 100) / 100,
-  orders: ORDERS_TOTAL,
-  units: UNITS_TOTAL,
+// Mock de API: GET /orders?channel&status&q&page&page_size
+const salesApi = {
+  async list(p: { channel: SalesChannelKey | "all"; status: OrderStatus | "all"; q: string; page: number; page_size: number }) {
+    await wait(450);
+    const q = p.q.trim().toLowerCase();
+    const base = SALE_ORDERS.filter(o => (p.channel === "all" || o.channel === p.channel)
+      && (!q || o.number.includes(q) || (o.buyer_name ?? "").toLowerCase().includes(q) || o.items.some(it => it.title.toLowerCase().includes(q) || it.sku.toLowerCase().includes(q))));
+    const counts = { total: base.length, pending_payment: 0, paid: 0, delivered: 0, cancelled: 0 } as Record<OrderStatus | "total", number>;
+    base.forEach(o => { counts[o.status]++; });
+    const rows = p.status === "all" ? base : base.filter(o => o.status === p.status);
+    return { items: rows.slice(p.page * p.page_size, (p.page + 1) * p.page_size), total: rows.length, counts };
+  },
 };
 
-const TOP_PRODUCTS = [
-  { name: "Panquequera Eléctrica Dinax 30cm", id: "MLA3378196408", units: 4, amount: 535200 },
-  { name: "Combo Teclado Y Mouse Inalámbrico Dinax Negro Sensor Óptico", id: "MLA3273448408", units: 5, amount: 268200 },
-  { name: "Cabina Uñas Cherimoya 5 Plus Blanco 48w Uv Led Sensor", id: "MLA3481112214", units: 1, amount: 210000 },
-  { name: "Mochila Unicross 17 Pulgadas 62.3642.1/neg/cuo Color Negro", id: "MLA3291475268", units: 2, amount: 183432.4 },
-  { name: "Escurridor Plástico Star House Verde Menta Y Blanco", id: "MLA3511420692", units: 9, amount: 164700 },
-  { name: "Cable Usb Tipo C Reforzado Carga Rápida Luz Naranja 1m", id: "MLA3273602930", units: 21, amount: 138600 },
-];
-
-const TOP_CATEGORIES = [
-  { name: "Electrodomésticos", id: "MLA5726", units: 38, amount: 1284500 },
-  { name: "Informática", id: "MLA1648", units: 74, amount: 986200 },
-  { name: "Belleza y Cuidado Personal", id: "MLA1246", units: 41, amount: 742800 },
-  { name: "Mochilas y Bolsos", id: "MLA1276", units: 29, amount: 511300 },
-  { name: "Hogar, Muebles y Jardín", id: "MLA1574", units: 96, amount: 468900 },
-  { name: "Accesorios para Vehículos", id: "MLA1743", units: 52, amount: 311400 },
-];
-
-const ML_ORDERS: MlOrder[] = [
-  { id: "2000018677825048", pack: "2000015240005261", date: "28/9/2026 11:15", status: "Pagada", product: "Escurridor Plástico Star House Verde Menta Y Blanco", itemId: "MLA3511420692", catId: "MLA376610", condition: "Nuevo", units: 1, unitPrice: 17385, gross: 18300, commission: 5308.11 },
-  { id: "2000018671158098", pack: "2000015233539975", date: "27/9/2026 21:33", status: "Pagada", product: "Cable Usb Tipo C Reforzado Carga Rápida Luz Naranja 1m", itemId: "MLA3273602930", catId: "MLA10626", condition: "Nuevo", units: 4, unitPrice: 9900, gross: 39600, commission: 2957.32 },
-  { id: "2000018664902311", pack: null, date: "27/9/2026 15:02", status: "Enviada", product: "Panquequera Eléctrica Dinax 30cm", itemId: "MLA3378196408", catId: "MLA5726", condition: "Nuevo", units: 1, unitPrice: 133800, gross: 133800, commission: 17394.00 },
-  { id: "2000018659114770", pack: "2000015228841203", date: "26/9/2026 19:48", status: "Pagada", product: "Combo Teclado Y Mouse Inalámbrico Dinax Negro Sensor Óptico", itemId: "MLA3273448408", catId: "MLA1648", condition: "Nuevo", units: 2, unitPrice: 53640, gross: 107280, commission: 13410.00 },
-  { id: "2000018651007422", pack: null, date: "26/9/2026 10:21", status: "Pagada", product: "Cabina Uñas Cherimoya 5 Plus Blanco 48w Uv Led Sensor", itemId: "MLA3481112214", catId: "MLA1246", condition: "Nuevo", units: 1, unitPrice: 210000, gross: 210000, commission: 27300.00 },
-  { id: "2000018643778190", pack: null, date: "25/9/2026 22:07", status: "Cancelada", product: "Mochila Unicross 17 Pulgadas 62.3642.1/neg/cuo Color Negro", itemId: "MLA3291475268", catId: "MLA1276", condition: "Nuevo", units: 2, unitPrice: 45858.1, gross: 91716.2, commission: 11923.11 },
-  { id: "2000018637221056", pack: "2000015211003948", date: "25/9/2026 14:39", status: "Enviada", product: "Set Tabla Gourmet + Chocolate Artesanal", itemId: "MLA3410028871", catId: "MLA1574", condition: "Nuevo", units: 1, unitPrice: 31000, gross: 31000, commission: 4185.00 },
-  { id: "2000018629840173", pack: null, date: "24/9/2026 18:55", status: "Pagada", product: "Paño Decoración Estampado Exclusivo", itemId: "MLA3298114552", catId: "MLA1574", condition: "Nuevo", units: 3, unitPrice: 3200, gross: 9600, commission: 1248.00 },
-  { id: "2000018622119884", pack: "2000015199772140", date: "24/9/2026 09:12", status: "Pagada", product: "Cable Usb Tipo C Reforzado Carga Rápida Luz Naranja 1m", itemId: "MLA3273602930", catId: "MLA10626", condition: "Nuevo", units: 6, unitPrice: 9900, gross: 59400, commission: 4435.98 },
-  { id: "2000018615003271", pack: null, date: "23/9/2026 20:44", status: "Enviada", product: "Panquequera Eléctrica Dinax 30cm", itemId: "MLA3378196408", catId: "MLA5726", condition: "Nuevo", units: 3, unitPrice: 133800, gross: 401400, commission: 52182.00 },
-  { id: "2000018608447190", pack: null, date: "23/9/2026 12:30", status: "Pagada", product: "Combo Teclado Y Mouse Inalámbrico Dinax Negro Sensor Óptico", itemId: "MLA3273448408", catId: "MLA1648", condition: "Nuevo", units: 3, unitPrice: 53640, gross: 160920, commission: 20115.00 },
-  { id: "2000018600228845", pack: "2000015182003117", date: "22/9/2026 16:08", status: "Pagada", product: "Escurridor Plástico Star House Verde Menta Y Blanco", itemId: "MLA3511420692", catId: "MLA376610", condition: "Nuevo", units: 5, unitPrice: 18300, gross: 91500, commission: 26540.55 },
-  { id: "2000018593771002", pack: null, date: "22/9/2026 08:51", status: "Cancelada", product: "Mochila Unicross 17 Pulgadas 62.3642.1/neg/cuo Color Negro", itemId: "MLA3291475268", catId: "MLA1276", condition: "Nuevo", units: 1, unitPrice: 45858.1, gross: 45858.1, commission: 5961.55 },
-  { id: "2000018586009337", pack: null, date: "21/9/2026 21:19", status: "Enviada", product: "Cabina Uñas Cherimoya 5 Plus Blanco 48w Uv Led Sensor", itemId: "MLA3481112214", catId: "MLA1246", condition: "Nuevo", units: 2, unitPrice: 105000, gross: 210000, commission: 27300.00 },
-  { id: "2000018578112640", pack: "2000015166552901", date: "21/9/2026 13:02", status: "Pagada", product: "Set Asado Completo con Utensilios Premium", itemId: "MLA3388217705", catId: "MLA1574", condition: "Nuevo", units: 1, unitPrice: 35000, gross: 35000, commission: 4550.00 },
-  { id: "2000018569447128", pack: null, date: "20/9/2026 17:47", status: "Pagada", product: "Cable Usb Tipo C Reforzado Carga Rápida Luz Naranja 1m", itemId: "MLA3273602930", catId: "MLA10626", condition: "Nuevo", units: 11, unitPrice: 9900, gross: 108900, commission: 8134.63 },
-];
-
-const ML_ORDER_STATUS: Record<MlOrderStatus, { color: string; bg: string }> = {
-  Pagada: { color: "#16A34A", bg: "#DCFCE7" },
-  Enviada: { color: "#0891B2", bg: "#CFFAFE" },
-  Cancelada: { color: "#DC2626", bg: "#FEE2E2" },
+const fmtSaleDate = (iso: string) => {
+  const d = new Date(iso);
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
-
-function VentasKpiCard({ label, value, tone, icon }: { label: string; value: string; tone: string; icon: ReactNode }) {
-  return (
-    <div className="group relative flex-1 min-w-0 rounded-2xl bg-white px-5 py-4 overflow-hidden transition-all duration-200"
-      style={{ border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 8px 24px -8px rgba(15,23,42,0.14)"; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = `${tone}44`; }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 2px rgba(15,23,42,0.04)"; e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.borderColor = "#E2E8F0"; }}>
-      <span className="absolute left-0 top-0 bottom-0" style={{ width: 3, background: tone, opacity: 0.85 }} />
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "#94A3B8" }}>{label}</p>
-          <p className="mt-2 font-bold tabular-nums truncate" style={{ fontSize: "22px", lineHeight: 1.1, color: tone }}>{value}</p>
-        </div>
-        <span className="flex items-center justify-center rounded-xl flex-shrink-0 transition-transform duration-200 group-hover:scale-105"
-          style={{ width: 38, height: 38, color: tone, background: `linear-gradient(135deg, ${tone}1F, ${tone}0D)` }}>{icon}</span>
-      </div>
-    </div>
-  );
-}
-
-function SalesChart() {
-  const W = 1000, H = 300, padL = 64, padR = 16, padT = 16, padB = 34;
-  const pts = SALES_SERIES;
-  const maxV = 350000;
-  const innerW = W - padL - padR, innerH = H - padT - padB;
-  const x = (i: number) => padL + (i / (pts.length - 1)) * innerW;
-  const y = (v: number) => padT + innerH - (v / maxV) * innerH;
-  // Smooth the polyline with a light Catmull-Rom → cubic-bézier pass so the curve reads polished, not jagged.
-  const P = pts.map((p, i) => ({ x: x(i), y: y(p.value) }));
-  let line = `M${P[0].x.toFixed(1)},${P[0].y.toFixed(1)}`;
-  for (let i = 0; i < P.length - 1; i++) {
-    const p0 = P[i - 1] ?? P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] ?? P[i + 1];
-    const t = 0.16;
-    const c1x = p1.x + (p2.x - p0.x) * t, c1y = p1.y + (p2.y - p0.y) * t;
-    const c2x = p2.x - (p3.x - p1.x) * t, c2y = p2.y - (p3.y - p1.y) * t;
-    line += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
-  }
-  const area = `${line} L${x(pts.length - 1).toFixed(1)},${(padT + innerH).toFixed(1)} L${padL},${(padT + innerH).toFixed(1)} Z`;
-  const gy = [0, 50000, 100000, 150000, 200000, 250000, 300000, 350000];
-  const step = 8;
-  const labels = pts.map((p, i) => ({ i, p })).filter(({ i }) => i % step === 0 || i === pts.length - 1);
-  const last = P[P.length - 1];
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }} preserveAspectRatio="xMidYMid meet">
-      <defs>
-        <linearGradient id="salesFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#4F46E5" stopOpacity="0.20" />
-          <stop offset="100%" stopColor="#4F46E5" stopOpacity="0" />
-        </linearGradient>
-        <linearGradient id="salesStroke" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#6366F1" />
-          <stop offset="100%" stopColor="#4F46E5" />
-        </linearGradient>
-      </defs>
-      {gy.map(v => (
-        <g key={v}>
-          <line x1={padL} y1={y(v)} x2={W - padR} y2={y(v)} stroke="#F1F5F9" strokeWidth="1" strokeDasharray={v === 0 ? "0" : "3 4"} />
-          <text x={padL - 10} y={y(v) + 3.5} textAnchor="end" fontSize="10" fill="#94A3B8">${(v / 1000).toLocaleString("es-AR")}.000</text>
-        </g>
-      ))}
-      <path d={area} fill="url(#salesFill)" />
-      <path d={line} fill="none" stroke="url(#salesStroke)" strokeWidth="2.25" strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={last.x} cy={last.y} r="7" fill="#4F46E5" opacity="0.12" />
-      <circle cx={last.x} cy={last.y} r="3.5" fill="#4F46E5" stroke="white" strokeWidth="1.5" />
-      {labels.map(({ i, p }) => (
-        <text key={i} x={x(i)} y={H - 12} textAnchor="middle" fontSize="9.5" fill="#94A3B8" transform={`rotate(-40 ${x(i)} ${H - 12})`}>{dm(p.date)}</text>
-      ))}
-    </svg>
-  );
-}
-
-function TopLideres() {
-  const [tab, setTab] = useState<"productos" | "categorias">("productos");
-  const rows = tab === "productos" ? TOP_PRODUCTS : TOP_CATEGORIES;
-  const rankTone = ["#F59E0B", "#94A3B8", "#B45309", "#CBD5E1"];
-  return (
-    <div className="rounded-2xl bg-white flex flex-col min-h-0" style={{ border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
-      <div className="flex items-center justify-between gap-3 px-5 py-4 flex-shrink-0" style={{ borderBottom: "1px solid #F1F5F9" }}>
-        <div className="flex items-center gap-2">
-          <span style={{ color: "#F59E0B" }}><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 2h8v3a4 4 0 0 1-8 0V2z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" /><path d="M4 3H2.5v1.5A2 2 0 0 0 4 6M12 3h1.5v1.5A2 2 0 0 1 12 6M6.5 9.5h3M6 13.5h4M8 9.5v4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /></svg></span>
-          <h2 style={{ fontSize: "12px", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: "#0A1628" }}>Top líderes</h2>
-        </div>
-        <div className="flex items-center rounded-lg p-0.5" style={{ background: "#F1F5F9" }}>
-          {(["productos", "categorias"] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)} className="px-2.5 py-1 rounded-md text-xs font-semibold transition-all capitalize"
-              style={{ background: tab === t ? "white" : "transparent", color: tab === t ? "#4F46E5" : "#64748B", boxShadow: tab === t ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>
-              {t === "productos" ? "Productos" : "Categorías"}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto divide-y" style={{ borderColor: "#F8FAFC" }}>
-        {rows.map((r, i) => (
-          <div key={r.id} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-slate-50" style={{ borderTop: i === 0 ? "none" : "1px solid #F8FAFC" }}>
-            <span className="flex items-center justify-center rounded-lg flex-shrink-0 text-xs font-bold tabular-nums"
-              style={{ width: 24, height: 24, color: "white", background: rankTone[i] ?? "#CBD5E1" }}>{i + 1}</span>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold truncate" style={{ color: "#0A1628" }}>{r.name}</p>
-              <p className="truncate" style={{ fontSize: "11px", color: "#94A3B8" }}>ID: {r.id} · {r.units} u.</p>
-            </div>
-            <span className="text-sm font-bold tabular-nums flex-shrink-0" style={{ color: "#4F46E5" }}>{fmt2(r.amount)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function VentasFilter({ label }: { label: string }) {
-  return (
-    <button className="flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors flex-shrink-0"
-      style={{ background: "white", border: "1.5px solid #E2E8F0", color: "#475569" }}
-      onMouseEnter={e => (e.currentTarget.style.borderColor = "#CBD5E1")} onMouseLeave={e => (e.currentTarget.style.borderColor = "#E2E8F0")}>
-      {label}
-      <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style={{ color: "#94A3B8" }}><path d="M3 4.5L6 7.5l3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>
-    </button>
-  );
-}
-
-// ─── Ventas (dashboard multicanal unificado) ────────────────────────────────────
-// Un solo tab de Ventas que unifica todos los canales (MercadoLibre, Tiendanube,
-// Shopify) en lugar de un panel por plataforma.
-
-type SalesChannelKey = "ml" | "tn" | "shopify";
-const SALES_CHANNELS: Record<SalesChannelKey, { name: string; badgeText: string; badgeBg: string; badgeBorder: string; dot: string; pct: number }> = {
-  ml: { name: "Mercado Libre", badgeText: "#B45309", badgeBg: "#FEF7E6", badgeBorder: "#FDE68A", dot: "#2563EB", pct: 52 },
-  tn: { name: "Tiendanube", badgeText: "#4F46E5", badgeBg: "#EEF2FF", badgeBorder: "#C7D2FE", dot: "#7C3AED", pct: 31 },
-  shopify: { name: "Shopify", badgeText: "#15803D", badgeBg: "#DCFCE7", badgeBorder: "#BBF7D0", dot: "#16A34A", pct: 17 },
-};
-
-type LiveOrder = { id: string; product: string; when: string; channel: SalesChannelKey; amount: number };
-const LIVE_ORDERS: LiveOrder[] = [
-  { id: "#45899", product: "Cafetera Espresso Automática", when: "¡Ahora mismo!", channel: "ml", amount: 135000 },
-  { id: "#45935", product: "Monitor Gamer 27\" 165Hz IPS", when: "¡Ahora mismo!", channel: "ml", amount: 310000 },
-  { id: "#45902", product: "Teclado Mecánico RGB Wireless", when: "Hace 1 min", channel: "shopify", amount: 54200 },
-  { id: "#45909", product: "Silla Gamer Ergonómica Pro", when: "Hace 1 min", channel: "tn", amount: 189900 },
-  { id: "#45912", product: "Auriculares Bluetooth ANC", when: "Hace 2 min", channel: "tn", amount: 78500 },
-  { id: "#45918", product: "Webcam Full HD 1080p", when: "Hace 3 min", channel: "shopify", amount: 32900 },
-  { id: "#45921", product: "Notebook Ultrabook 14\" i7", when: "Hace 4 min", channel: "ml", amount: 890000 },
-  { id: "#45927", product: "Parlante Portátil Waterproof", when: "Hace 6 min", channel: "tn", amount: 46800 },
-];
-
-// Serie de la curva multicanal (distribución horaria unificada). Los puntos marcados
-// resaltan el canal dominante de cada franja.
-const SALES_CURVE = [15, 22, 30, 34, 31, 28, 33, 50, 60, 55, 46, 36, 42, 64, 80];
-const CURVE_DOTS: { i: number; channel: SalesChannelKey }[] = [
-  { i: 4, channel: "tn" },
-  { i: 8, channel: "ml" },
-  { i: 11, channel: "shopify" },
-];
-
-function MulticanalChart() {
-  const W = 1000, H = 300, padL = 12, padR = 12, padT = 24, padB = 20;
-  const pts = SALES_CURVE;
-  const maxV = 100;
-  const innerW = W - padL - padR, innerH = H - padT - padB;
-  const x = (i: number) => padL + (i / (pts.length - 1)) * innerW;
-  const y = (v: number) => padT + innerH - (v / maxV) * innerH;
-  const P = pts.map((v, i) => ({ x: x(i), y: y(v) }));
-  let line = `M${P[0].x.toFixed(1)},${P[0].y.toFixed(1)}`;
-  for (let i = 0; i < P.length - 1; i++) {
-    const p0 = P[i - 1] ?? P[i], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2] ?? P[i + 1];
-    const t = 0.18;
-    const c1x = p1.x + (p2.x - p0.x) * t, c1y = p1.y + (p2.y - p0.y) * t;
-    const c2x = p2.x - (p3.x - p1.x) * t, c2y = p2.y - (p3.y - p1.y) * t;
-    line += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
-  }
-  const base = padT + innerH;
-  const area = `${line} L${x(pts.length - 1).toFixed(1)},${base.toFixed(1)} L${padL},${base.toFixed(1)} Z`;
-  const last = P[P.length - 1];
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }} preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="ventasFill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#3B82F6" stopOpacity="0.22" />
-          <stop offset="100%" stopColor="#3B82F6" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {[25, 55, 85].map(v => (
-        <line key={v} x1={padL} y1={y(v)} x2={W - padR} y2={y(v)} stroke="#F1F5F9" strokeWidth="1.5" />
-      ))}
-      <path d={area} fill="url(#ventasFill)" />
-      <path d={line} fill="none" stroke="#2563EB" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-      {CURVE_DOTS.map(({ i, channel }) => (
-        <g key={i}>
-          <circle cx={P[i].x} cy={P[i].y} r="11" fill={SALES_CHANNELS[channel].dot} opacity="0.16" />
-          <circle cx={P[i].x} cy={P[i].y} r="5.5" fill={SALES_CHANNELS[channel].dot} stroke="white" strokeWidth="2.5" />
-        </g>
-      ))}
-      <circle cx={last.x} cy={last.y} r="12" fill="#2563EB" opacity="0.16" />
-      <circle cx={last.x} cy={last.y} r="6" fill="#2563EB" stroke="white" strokeWidth="2.5" />
-    </svg>
-  );
-}
-
-function VentasStatCard({ label, value, tone = "#0A1628", badge, sub }: { label: string; value: string; tone?: string; badge?: ReactNode; sub?: ReactNode }) {
-  return (
-    <div className="flex-1 min-w-[190px] rounded-2xl bg-white px-5 py-4 transition-all duration-200"
-      style={{ border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}
-      onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 8px 24px -8px rgba(15,23,42,0.12)"; e.currentTarget.style.transform = "translateY(-2px)"; }}
-      onMouseLeave={e => { e.currentTarget.style.boxShadow = "0 1px 2px rgba(15,23,42,0.04)"; e.currentTarget.style.transform = "translateY(0)"; }}>
-      <div className="flex items-start justify-between gap-2">
-        <p style={{ fontSize: "13px", fontWeight: 500, color: "#64748B" }}>{label}</p>
-        {badge}
-      </div>
-      <p className="mt-2 font-bold tabular-nums" style={{ fontSize: "30px", lineHeight: 1.05, color: tone }}>{value}</p>
-      {sub && <div className="mt-2" style={{ fontSize: "12px" }}>{sub}</div>}
-    </div>
-  );
-}
 
 function ChannelBadge({ channel }: { channel: SalesChannelKey }) {
   const c = SALES_CHANNELS[channel];
+  return <span className="inline-flex items-center rounded-full px-2 py-0.5 whitespace-nowrap" style={{ fontSize: "10px", fontWeight: 700, color: c.text, background: c.bg, border: `1px solid ${c.border}` }}>{c.name}</span>;
+}
+function OrderStatusBadge({ status }: { status: OrderStatus }) {
+  const m = ORDER_STATUS[status];
+  return <span className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 whitespace-nowrap font-semibold" style={{ fontSize: "10.5px", color: m.color, background: m.bg }}><span className="w-1.5 h-1.5 rounded-full" style={{ background: m.color }} />{m.label}</span>;
+}
+function StockSyncBadge({ sync }: { sync: StockSync }) {
+  const m = STOCK_SYNC[sync];
+  if (sync === "not_applicable") return <span title="No aplica: la orden no llegó a pagarse" style={{ color: "#CBD5E1" }}>— No aplica</span>;
+  return <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 whitespace-nowrap font-semibold" style={{ fontSize: "10.5px", color: m.color, background: m.bg }}><span aria-hidden>{m.glyph}</span>{m.label}</span>;
+}
+
+const ICON_CLOCK = <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" /><path d="M8 4.8V8l2.2 1.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>;
+const ICON_BOX = <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 5 8 2.2 13.5 5v6L8 13.8 2.5 11V5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M2.5 5 8 7.8 13.5 5M8 7.8v6" stroke="currentColor" strokeWidth="1.4" /></svg>;
+const ICON_X = <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" /><path d="M6 6l4 4M10 6l-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>;
+
+type SaleCol = ManagedCol & { render: (o: SaleOrder) => ReactNode; align?: "right" };
+const SALE_COLS: SaleCol[] = [
+  { key: "order", label: "Orden", locked: true, render: o => (
+    <div className="flex flex-col gap-1 items-start">
+      <span className="font-semibold tabular-nums" style={{ color: "#0A1628" }}>#{o.number}</span>
+      <ChannelBadge channel={o.channel} />
+    </div>) },
+  { key: "created", label: "Fecha", render: o => <span className="tabular-nums whitespace-nowrap" style={{ color: "#64748B" }}>{fmtSaleDate(o.created_at)}</span> },
+  { key: "buyer", label: "Comprador", render: o => o.buyer_name ? <span style={{ color: "#334155" }}>{o.buyer_name}</span> : <span style={{ color: "#CBD5E1" }}>—</span> },
+  { key: "items", label: "Productos", render: o => (
+    <div className="min-w-0">
+      <div className="truncate" style={{ color: "#334155", maxWidth: 240 }}>{o.items[0].title}</div>
+      <div style={{ fontSize: "10px", color: "#94A3B8" }}>{o.items.length} {o.items.length === 1 ? "ítem" : "ítems"}</div>
+    </div>) },
+  { key: "total", label: "Total", align: "right", render: o => <span className="font-semibold tabular-nums whitespace-nowrap" style={{ color: "#0A1628" }}>{fmt(o.total)}</span> },
+  { key: "status", label: "Estado", render: o => <OrderStatusBadge status={o.status} /> },
+  { key: "sync", label: "Sync stock", render: o => <StockSyncBadge sync={o.stock_sync} /> },
+  { key: "channel", label: "Canal", render: o => <span style={{ color: "#334155" }}>{SALES_CHANNELS[o.channel].name}</span> },
+  { key: "currency", label: "Moneda", render: o => <span className="font-mono" style={{ color: "#64748B" }}>{o.currency}</span> },
+  { key: "updated", label: "Actualizado", render: o => <span className="tabular-nums whitespace-nowrap" style={{ color: "#64748B" }}>{fmtSaleDate(o.updated_at)}</span> },
+  { key: "link", label: "Enlace", render: o => (
+    <a href={o.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="font-semibold hover:underline whitespace-nowrap" style={{ color: "#4F46E5" }}>Abrir ↗</a>) },
+];
+const SALE_DEFAULT_COLS = ["order", "created", "buyer", "items", "total", "status", "sync"];
+const SALE_COLS_KEY = "omnipanel.ventas.cols";
+
+// Drawer de orden — mismo shell que el de Inventario (820px, rail de identidad a la
+// izquierda en #FAFBFC, contenido a la derecha, footer con acciones).
+// Historial en el rail; productos y sync de stock a la vista en el panel derecho.
+const railLabel = (t: string) => <span style={{ fontSize: "9px", fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "#CBD5E1" }}>{t}</span>;
+const sectionLabel = (t: string) => <h3 style={{ fontSize: "10px", fontWeight: 700, letterSpacing: "0.07em", textTransform: "uppercase", color: "#94A3B8" }}>{t}</h3>;
+
+function SaleIdentity({ order }: { order: SaleOrder }) {
   return (
-    <span className="inline-flex items-center rounded-full px-3 py-1 whitespace-nowrap" style={{ fontSize: "12px", fontWeight: 700, color: c.badgeText, background: c.badgeBg, border: `1px solid ${c.badgeBorder}` }}>{c.name}</span>
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1.5 items-start">
+        <p className="font-semibold text-sm tabular-nums" style={{ color: "#0A1628" }}>Orden #{order.number}</p>
+        <ChannelBadge channel={order.channel} />
+      </div>
+      <div className="flex flex-col gap-1">{railLabel("Estado")}<div><OrderStatusBadge status={order.status} /></div></div>
+      <div className="flex flex-col gap-0.5">{railLabel("Total")}<span className="text-lg font-bold tabular-nums" style={{ color: "#0A1628" }}>{fmt(order.total)} <span className="text-[10px] font-medium" style={{ color: "#94A3B8" }}>{order.currency}</span></span></div>
+      {[
+        { label: "Comprador", value: order.buyer_name ?? "—" },
+        { label: "Fecha", value: `${fmtSaleDate(order.created_at)} hs` },
+        { label: "Ítems", value: `${order.items.reduce((a, it) => a + it.quantity, 0)} unidades · ${order.items.length} ${order.items.length === 1 ? "producto" : "productos"}` },
+      ].map(f => (
+        <div key={f.label} className="flex flex-col gap-0.5">{railLabel(f.label)}<span className="text-xs" style={{ color: "#475569" }}>{f.value}</span></div>
+      ))}
+    </div>
   );
 }
 
-const VENTAS_PERIODS = ["Hoy", "7 días", "30 días"] as const;
-type VentasPeriod = typeof VENTAS_PERIODS[number];
-
-function Ventas() {
-  const [period, setPeriod] = useState<VentasPeriod>("Hoy");
-  const [channel, setChannel] = useState<SalesChannelKey | "all">("all");
-  const orders = channel === "all" ? LIVE_ORDERS : LIVE_ORDERS.filter(o => o.channel === channel);
-  const chips: { key: SalesChannelKey | "all"; label: string }[] = [
-    { key: "all", label: "Todos" },
-    { key: "ml", label: "Mercado Libre" },
-    { key: "tn", label: "Tiendanube" },
-    { key: "shopify", label: "Shopify" },
-  ];
-
+function SaleHistory({ order, compact }: { order: SaleOrder; compact?: boolean }) {
   return (
-    <div className="flex flex-col flex-1 min-w-0">
-      <header className="flex items-center justify-between gap-3 px-6 py-3 flex-shrink-0 bg-white" style={{ borderBottom: "1px solid #E2E8F0" }}>
-        <div>
-          <h1 className="text-base font-bold" style={{ color: "#0A1628" }}>Ventas</h1>
-          <p style={{ fontSize: "12px", color: "#94A3B8" }}>Panel unificado de todos tus canales</p>
-        </div>
-        <div className="flex items-center gap-3 flex-wrap justify-end">
-          {/* Filtros por canal */}
-          <div className="flex items-center gap-2 flex-wrap">
-            {chips.map(ch => {
-              const on = channel === ch.key;
-              const c = ch.key === "all" ? null : SALES_CHANNELS[ch.key];
-              const bg = on ? (c ? c.badgeText : "#0F172A") : (c ? c.badgeBg : "#F1F5F9");
-              const col = on ? "white" : (c ? c.badgeText : "#475569");
-              return (
-                <button key={ch.key} onClick={() => setChannel(ch.key)} className="rounded-full px-3.5 py-1.5 transition-colors"
-                  style={{ fontSize: "12.5px", fontWeight: 700, background: bg, color: col, border: `1px solid ${on ? "transparent" : (c ? c.badgeBorder : "#E2E8F0")}` }}>
-                  {ch.label}
-                </button>
-              );
-            })}
-          </div>
-          {/* Selector de período */}
-          <div className="flex items-center rounded-xl p-1" style={{ background: "#F1F5F9" }}>
-            {VENTAS_PERIODS.map(p => (
-              <button key={p} onClick={() => setPeriod(p)} className="px-3.5 py-1.5 rounded-lg transition-all"
-                style={{ fontSize: "13px", fontWeight: 600, background: period === p ? "white" : "transparent", color: period === p ? "#4F46E5" : "#64748B", boxShadow: period === p ? "0 1px 2px rgba(15,23,42,0.08)" : "none" }}>
-                {p}
-              </button>
-            ))}
-          </div>
-        </div>
-      </header>
-
-      <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-4 min-h-0">
-        {/* KPIs */}
-        <div className="flex flex-wrap gap-4">
-          <VentasStatCard label="Facturación" value={fmt(284500)}
-            badge={<span className="rounded-full px-2 py-0.5" style={{ fontSize: "11px", fontWeight: 700, color: "#16A34A", background: "#DCFCE7" }}>+18.4%</span>}
-            sub={<span style={{ color: "#94A3B8" }}>4 canales sincronizados</span>} />
-          <VentasStatCard label="Total Pedidos" value={fmtInt(1263)} tone="#2563EB"
-            sub={<span style={{ color: "#16A34A", fontWeight: 600 }}>✓ 100% procesados</span>} />
-          <VentasStatCard label="Catálogo activo" value={fmtInt(1847)}
-            badge={<span className="rounded-full px-2 py-0.5" style={{ fontSize: "11px", fontWeight: 700, color: "#2563EB", background: "#DBEAFE" }}>OK</span>}
-            sub={<span style={{ color: "#94A3B8" }}>Productos en stock</span>} />
-          <VentasStatCard label="Canales activos" value="4 / 4"
-            badge={<span className="rounded-full" style={{ display: "inline-block", width: 9, height: 9, background: "#16A34A" }} />}
-            sub={<span className="inline-flex items-center gap-1.5" style={{ color: "#16A34A", fontWeight: 600 }}><span className="rounded-full" style={{ width: 6, height: 6, background: "#16A34A" }} />0 ms latencia</span>} />
-        </div>
-
-        {/* Curva de ventas multicanal */}
-        <div className="rounded-2xl bg-white flex flex-col" style={{ border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
-          <div className="flex items-start justify-between gap-4 flex-wrap px-6 pt-5">
-            <div>
-              <h2 style={{ fontSize: "13px", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: "#0A1628" }}>Curva de ventas multicanal</h2>
-              <p className="mt-0.5" style={{ fontSize: "12px", color: "#94A3B8" }}>Distribución horaria unificada</p>
+    <ol className="flex flex-col">
+      {[...order.history].reverse().map((ev, i, arr) => {
+        const current = i === 0; const m = ORDER_STATUS[ev.status];
+        return (
+          <li key={i} className="flex gap-3">
+            <div className="flex flex-col items-center">
+              <span className="rounded-full flex-shrink-0 mt-1" style={{ width: 10, height: 10, background: current ? m.color : "white", border: `2px solid ${current ? m.color : "#CBD5E1"}`, boxShadow: current ? `0 0 0 4px ${m.bg}` : "none" }} />
+              {i < arr.length - 1 && <span className="flex-1 w-px my-1" style={{ background: "#E2E8F0", minHeight: 20 }} />}
             </div>
-            <div className="flex items-center gap-5">
-              {(Object.keys(SALES_CHANNELS) as SalesChannelKey[]).map(k => (
-                <span key={k} className="inline-flex items-center gap-2" style={{ fontSize: "13px", color: "#475569" }}>
-                  <span className="rounded-full" style={{ width: 9, height: 9, background: SALES_CHANNELS[k].dot }} />
-                  {SALES_CHANNELS[k].name} ({SALES_CHANNELS[k].pct}%)
-                </span>
-              ))}
+            <div className={compact ? "pb-3 min-w-0" : "pb-5 min-w-0"}>
+              <p className={compact ? "text-xs" : "text-[13px]"} style={{ color: current ? "#0A1628" : "#475569", fontWeight: current ? 700 : 500 }}>{m.label}</p>
+              <p className="tabular-nums" style={{ fontSize: "10.5px", color: "#94A3B8" }}>
+                {fmtSaleDate(ev.at)} <span className="font-mono">({ev.raw_status})</span>
+              </p>
             </div>
-          </div>
-          <div className="px-4 pb-4 pt-2" style={{ height: 260 }}><MulticanalChart /></div>
-        </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
-        {/* Últimos pedidos entrantes en vivo */}
-        <div className="rounded-2xl bg-white flex flex-col" style={{ border: "1px solid #E2E8F0", boxShadow: "0 1px 2px rgba(15,23,42,0.04)" }}>
-          <div className="flex items-center justify-between gap-3 flex-wrap px-6 py-4" style={{ borderBottom: "1px solid #F1F5F9" }}>
-            <div className="flex items-center gap-2.5">
-              <h2 style={{ fontSize: "13px", fontWeight: 800, letterSpacing: "0.04em", textTransform: "uppercase", color: "#0A1628" }}>Últimos pedidos entrantes en vivo</h2>
-              <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5" style={{ background: "#DCFCE7" }}>
-                <span className="rounded-full" style={{ width: 6, height: 6, background: "#16A34A", animation: "pulse 1.5s ease-in-out infinite" }} />
-                <span style={{ fontSize: "10px", fontWeight: 800, letterSpacing: "0.05em", color: "#15803D" }}>TIEMPO REAL</span>
-              </span>
-            </div>
+function SaleProducts({ order }: { order: SaleOrder }) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
+      {order.items.map((it, i) => (
+        <div key={i} className="flex items-start gap-3 px-4 py-3" style={{ borderTop: i ? "1px solid #F1F5F9" : "none" }}>
+          <span className="tabular-nums font-bold text-xs mt-px" style={{ color: "#4F46E5" }}>{it.quantity}×</span>
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-medium truncate" style={{ color: "#0A1628" }}>{it.title}</p>
+            <p className="font-mono" style={{ fontSize: "10.5px", color: "#94A3B8" }}>{it.sku} · {fmt(it.unit_price)} c/u</p>
           </div>
-          <div>
-            {orders.length === 0 ? (
-              <div className="px-6 py-12 text-center text-sm" style={{ color: "#94A3B8" }}>No hay pedidos para este canal.</div>
-            ) : orders.map((o, i) => (
-              <div key={o.id} className="flex items-center gap-4 px-6 py-4 transition-colors hover:bg-slate-50" style={{ borderTop: i === 0 ? "none" : "1px solid #F8FAFC" }}>
-                <span className="font-mono tabular-nums flex-shrink-0" style={{ fontSize: "13px", color: "#94A3B8", width: 56 }}>{o.id}</span>
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold truncate" style={{ fontSize: "15px", color: "#0A1628" }}>{o.product}</p>
-                  <p style={{ fontSize: "12px", color: "#94A3B8" }}>{o.when}</p>
+          <span className="text-[13px] font-semibold tabular-nums" style={{ color: "#0A1628" }}>{fmt(it.quantity * it.unit_price)}</span>
+        </div>
+      ))}
+      <div className="flex items-center justify-between px-4 py-2.5" style={{ background: "#F8FAFC", borderTop: "1px solid #F1F5F9" }}>
+        <span className="text-xs font-semibold" style={{ color: "#64748B" }}>Subtotal</span>
+        <span className="text-sm font-bold tabular-nums" style={{ color: "#0A1628" }}>{fmt(order.items.reduce((a, it) => a + it.quantity * it.unit_price, 0))}</span>
+      </div>
+    </div>
+  );
+}
+
+const STOCK_TX_TYPE: Record<StockTxType, string> = { sale: "Venta", return: "Devolución de stock" };
+
+function SaleStock({ order }: { order: SaleOrder }) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between rounded-xl px-4 py-3" style={{ border: "1px solid #E2E8F0" }}>
+        <span className="text-xs font-medium" style={{ color: "#475569" }}>Estado general</span>
+        <StockSyncBadge sync={order.stock_sync} />
+      </div>
+
+      {/* Transacciones por ítem, apiladas */}
+      <div className="flex flex-col gap-3">
+        {order.items.map((it, i) => (
+          <div key={i} className="rounded-xl overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5" style={{ background: "#F8FAFC", borderBottom: "1px solid #F1F5F9" }}>
+              <span className="text-xs font-semibold truncate" style={{ color: "#0A1628" }}>{it.title}</span>
+              <span className="font-mono flex-shrink-0" style={{ fontSize: "10.5px", color: "#94A3B8" }}>{it.quantity}× · {it.sku}</span>
+            </div>
+            {it.stock_transactions.length === 0 ? (
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <span className="text-xs" style={{ color: "#94A3B8" }}>Sin movimientos de stock</span>
+                <StockSyncBadge sync="not_applicable" />
+              </div>
+            ) : it.stock_transactions.map((tx, k) => (
+              <div key={k} className="px-4 py-3" style={{ borderTop: k ? "1px solid #F1F5F9" : "none" }}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-2 text-[13px] font-medium" style={{ color: "#0A1628" }}>
+                    <span className="w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-bold" style={{ background: tx.type === "sale" ? "#EEF2FF" : "#F1F5F9", color: tx.type === "sale" ? "#4F46E5" : "#475569" }}>{tx.type === "sale" ? "−" : "+"}</span>
+                    {STOCK_TX_TYPE[tx.type]}
+                  </span>
+                  <StockSyncBadge sync={tx.status} />
                 </div>
-                <ChannelBadge channel={o.channel} />
-                <span className="font-bold tabular-nums text-right flex-shrink-0 whitespace-nowrap" style={{ fontSize: "16px", color: "#0A1628", width: 110 }}>{fmt(o.amount)}</span>
+                <p className="mt-1 pl-7 text-xs" style={{ color: tx.document_number ? "#475569" : "#94A3B8" }}>
+                  {tx.document_number ? <>Comprobante Nº <span className="font-semibold tabular-nums" style={{ color: "#0A1628" }}>{tx.document_number}</span></>
+                    : tx.status === "error" ? "Sin comprobante · el sistema rechazó el movimiento, se reintenta automáticamente"
+                    : "Sin comprobante · se genera al sincronizar"}
+                </p>
               </div>
             ))}
+          </div>
+        ))}
+      </div>
+
+      {/* Leyenda */}
+      <div className="rounded-xl px-4 py-3 flex flex-col gap-2" style={{ background: "#F8FAFC" }}>
+        <p className="text-[11px] font-semibold" style={{ color: "#475569" }}>Cómo leer esta sección</p>
+        <ul className="flex flex-col gap-1 text-[11px]" style={{ color: "#64748B" }}>
+          <li><b style={{ color: "#334155" }}>Venta</b>: descuenta las unidades vendidas en tu sistema de stock. <b style={{ color: "#334155" }}>Devolución de stock</b>: las vuelve a sumar cuando la orden se cancela.</li>
+          <li><b style={{ color: "#334155" }}>Comprobante Nº</b>: número del documento que generó tu sistema de stock para ese movimiento.</li>
+          <li><b style={{ color: "#16A34A" }}>✓ Sincronizado</b> registrado en el sistema · <b style={{ color: "#B45309" }}>⏳ Pendiente</b> en cola · <b style={{ color: "#DC2626" }}>⚠ Con error</b> rechazado, se reintenta · <b style={{ color: "#94A3B8" }}>— No aplica</b> la orden todavía no mueve stock.</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+function SaleDrawer({ order, onClose }: { order: SaleOrder; onClose: () => void }) {
+  const ch = SALES_CHANNELS[order.channel];
+  return (
+    <div className="fixed inset-0 z-50 flex" style={{ fontFamily: "'Inter', sans-serif" }}>
+      <div className="flex-1 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="w-[820px] max-w-full flex flex-col bg-white shadow-2xl" style={{ borderLeft: "1px solid #E2E8F0" }}>
+
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-6 py-4 flex-shrink-0" style={{ borderBottom: "1px solid #F1F5F9" }}>
+          <span className="text-xs" style={{ color: "#94A3B8" }}>Actualizado {fmtSaleDate(order.updated_at)} hs</span>
+          <button onClick={onClose} aria-label="Cerrar" className="p-1.5 rounded-lg hover:bg-slate-100 transition-colors" style={{ color: "#94A3B8" }}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+            </button>
+        </div>
+
+        <div className="flex flex-1 min-h-0">
+          {/* Rail izquierdo */}
+          <div className={`w-64 flex-shrink-0 flex flex-col gap-5 px-5 py-5 overflow-y-auto`} style={{ borderRight: "1px solid #F1F5F9", background: "#FAFBFC" }}>
+            <SaleIdentity order={order} />
+            <div className="flex flex-col gap-3 pt-4" style={{ borderTop: "1px solid #EEF2F6" }}>
+                {railLabel("Historial de estados")}
+                <SaleHistory order={order} compact />
+            </div>
+          </div>
+
+          {/* Contenido */}
+          <div className="flex-1 flex flex-col min-w-0">
+              <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col gap-7">
+                <section className="flex flex-col gap-3">{sectionLabel("Productos")}<SaleProducts order={order} /></section>
+                <section className="flex flex-col gap-3">{sectionLabel("Sincronización de stock")}<SaleStock order={order} /></section>
+              </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-2 px-6 py-4 flex-shrink-0" style={{ borderTop: "1px solid #F1F5F9" }}>
+              <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-medium hover:bg-slate-100 transition-colors" style={{ color: "#64748B" }}>Cerrar</button>
+              <a href={order.url} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-5 py-2 rounded-xl text-sm font-semibold transition-all hover:brightness-95"
+                style={{ background: "#4F46E5", color: "white" }}>
+                Ver en {ch.name}
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3h4v4M13 3 7 9M11 9.5V13H3V5h3.5" /></svg>
+              </a>
+            </div>
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function VentasOrdenes({ tabs }: { tabs: ReactNode }) {
+  const [search, setSearch] = useState("");
+  const [channel, setChannel] = useState<SalesChannelKey | "all">("all");
+  const [status, setStatus] = useState<OrderStatus | "all">("all");
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(0);
+  const [cols, setColsState] = useState<string[]>(() => { try { const v = JSON.parse(localStorage.getItem(SALE_COLS_KEY) ?? "null"); return Array.isArray(v) ? v : SALE_DEFAULT_COLS; } catch { return SALE_DEFAULT_COLS; } });
+  const setCols = (c: string[]) => { setColsState(c); try { localStorage.setItem(SALE_COLS_KEY, JSON.stringify(c)); } catch { /* sin storage */ } };
+  const [data, setData] = useState<Awaited<ReturnType<typeof salesApi.list>> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const [open, setOpen] = useState<SaleOrder | null>(null);
+
+  useEffect(() => { setPage(0); }, [search, channel, status, pageSize]);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError(null);
+    const t = setTimeout(() => {
+      salesApi.list({ channel, status, q: search, page, page_size: pageSize })
+        .then(r => { if (alive) setData(r); })
+        .catch(e => { if (alive) setError(e instanceof Error ? e.message : "No pudimos cargar las órdenes."); })
+        .finally(() => { if (alive) setLoading(false); });
+    }, search ? 250 : 0);
+    return () => { alive = false; clearTimeout(t); };
+  }, [search, channel, status, page, pageSize, reload]);
+
+  const counts = data?.counts;
+  const stats: Stat[] = [
+    { label: "Ventas", value: counts?.total ?? "—", sub: "total", tone: "#4F46E5", icon: ICON_LIST },
+    { label: "Pendientes de pago", value: counts?.pending_payment ?? "—", tone: "#F59E0B", icon: ICON_CLOCK },
+    { label: "Pagadas", value: counts?.paid ?? "—", tone: "#4F46E5", icon: ICON_CHECK },
+    { label: "Entregadas", value: counts?.delivered ?? "—", tone: "#16A34A", icon: ICON_BOX },
+    { label: "Canceladas", value: counts?.cancelled ?? "—", tone: "#DC2626", icon: ICON_X },
+  ];
+  const visible = cols.map(k => SALE_COLS.find(c => c.key === k)).filter(Boolean) as SaleCol[];
+  const total = data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const filterCount = (channel !== "all" ? 1 : 0) + (status !== "all" ? 1 : 0);
+
+  return (
+    <div className="flex flex-col flex-1 min-w-0 min-h-0">
+      <header className="flex items-center gap-3 px-6 py-3 flex-shrink-0 bg-white" style={{ borderBottom: "1px solid #E2E8F0" }}>
+        <div className="flex-1 relative">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#CBD5E1" }}>
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.4" /><path d="M9.5 9.5L12 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+          </span>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por orden, comprador, producto o SKU…"
+            className="w-full pl-9 pr-4 py-2 rounded-xl text-sm outline-none transition-all"
+            style={{ background: "#F8FAFC", border: "1.5px solid #E2E8F0", color: "#0A1628" }}
+            onFocus={e => { e.target.style.borderColor = "#4F46E5"; e.target.style.boxShadow = "0 0 0 3px rgba(79,70,229,0.08)"; }}
+            onBlur={e => { e.target.style.borderColor = "#E2E8F0"; e.target.style.boxShadow = "none"; }} />
+        </div>
+      </header>
+
+      <div className="flex-1 overflow-hidden flex flex-col p-5 min-h-0 gap-3">
+        <div className="flex items-center justify-between gap-3 flex-shrink-0 flex-wrap">
+          <div className="flex items-center gap-4">
+            <h1 className="text-base font-bold" style={{ color: "#0A1628" }}>Ventas</h1>
+            {tabs}
+          </div>
+          <div className="flex items-center gap-2">
+            <Popover width={280} trigger={o => (
+              <button className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-colors"
+                style={{ border: `1.5px solid ${o || filterCount ? "#4F46E5" : "#E2E8F0"}`, color: filterCount ? "#4F46E5" : "#475569", background: filterCount ? "#EEF2FF" : "white" }}>
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M2 3.5h12M4 8h8M6 12.5h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+                Filtros
+                {filterCount > 0 && <span className="ml-0.5 px-1.5 rounded-full text-white" style={{ fontSize: "9px", fontWeight: 700, background: "#4F46E5" }}>{filterCount}</span>}
+              </button>
+            )}>
+              {() => (
+                <div className="flex flex-col gap-3 p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold" style={{ color: "#0A1628" }}>Filtros</span>
+                    {filterCount > 0 && <button onClick={() => { setChannel("all"); setStatus("all"); }} className="text-xs font-medium hover:underline" style={{ color: "#4F46E5" }}>Limpiar</button>}
+                  </div>
+                  <FilterField label="Canal" value={channel} onChange={v => setChannel(v as SalesChannelKey | "all")}
+                    options={[{ value: "all", label: "Todos" }, { value: "ml", label: "MercadoLibre" }, { value: "tn", label: "Tienda Nube" }]} />
+                  <FilterField label="Estado" value={status} onChange={v => setStatus(v as OrderStatus | "all")}
+                    options={[{ value: "all", label: "Todos" }, ...(Object.keys(ORDER_STATUS) as OrderStatus[]).map(k => ({ value: k, label: ORDER_STATUS[k].label }))]} />
+                </div>
+              )}
+            </Popover>
+            <ListingColumnManager allCols={SALE_COLS} cols={cols} setCols={setCols} defaultCols={SALE_DEFAULT_COLS} />
+          </div>
+        </div>
+
+        <div className="overflow-x-auto flex-shrink-0"><div className="min-w-[720px]"><StatStrip stats={stats} /></div></div>
+
+        <div className="flex-1 flex flex-col min-h-0 rounded-2xl bg-white overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
+          <div className="flex-1 overflow-auto bg-white min-h-0">
+            {error ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center px-6">
+                <p className="text-sm font-semibold" style={{ color: "#0A1628" }}>No pudimos cargar las órdenes</p>
+                <p className="text-xs" style={{ color: "#64748B" }}>{error}</p>
+                <button onClick={() => setReload(n => n + 1)} className="mt-1 px-3 py-1.5 rounded-xl text-xs font-semibold" style={{ border: "1px solid #E2E8F0", color: "#4F46E5" }}>Reintentar</button>
+              </div>
+            ) : loading && !data ? <SpinnerText children="Cargando órdenes…" /> : (
+              <table className="w-full text-xs border-collapse" style={{ minWidth: 900, opacity: loading ? 0.55 : 1, transition: "opacity .15s" }}>
+                <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
+                  <tr className="bg-white" style={{ borderBottom: "1px solid #F1F5F9" }}>
+                    {visible.map(c => (
+                      <th key={c.key} className="px-3 py-3 font-semibold bg-white" style={{ color: "#94A3B8", fontSize: "10px", letterSpacing: "0.07em", textAlign: c.align ?? "left" }}>{c.label.toUpperCase()}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data && data.items.length === 0 ? (
+                    <tr><td colSpan={visible.length} className="px-4 py-14 text-center text-sm" style={{ color: "#94A3B8" }}>No hay órdenes que coincidan con la búsqueda o los filtros.</td></tr>
+                  ) : data?.items.map(o => (
+                    <tr key={o.id} onClick={() => setOpen(o)} className="cursor-pointer transition-colors hover:bg-slate-50" style={{ borderBottom: "1px solid #F8FAFC" }}>
+                      {visible.map(c => <td key={c.key} className="px-3 py-3" style={{ textAlign: c.align ?? "left" }}>{c.render(o)}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="flex items-center justify-between px-6 py-3 flex-shrink-0 bg-white" style={{ borderTop: "1px solid #E2E8F0" }}>
+            <span className="text-xs" style={{ color: "#94A3B8" }}>{total} {total === 1 ? "orden" : "órdenes"}</span>
+            <div className="flex items-center gap-3">
+              <span className="hidden sm:inline text-xs" style={{ color: "#94A3B8" }}>Mostrar</span>
+              <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))} className="hidden sm:block text-xs px-2 py-1 rounded-lg outline-none" style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", color: "#475569" }}>
+                <option>50</option><option>100</option><option>200</option>
+              </select>
+              <span className="text-xs font-medium" style={{ color: "#475569" }}>{total ? page * pageSize + 1 : 0} – {Math.min((page + 1) * pageSize, total)}</span>
+              {(["‹", "›"] as const).map(g => {
+                const dis = g === "‹" ? page === 0 : page >= pageCount - 1;
+                return <button key={g} disabled={dis} onClick={() => setPage(page + (g === "‹" ? -1 : 1))} aria-label={g === "‹" ? "Página anterior" : "Página siguiente"}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors text-sm"
+                  style={{ color: "#94A3B8", border: "1px solid #E2E8F0", cursor: dis ? "default" : "pointer", opacity: dis ? 0.4 : 1 }}
+                  onMouseEnter={e => { if (!dis) e.currentTarget.style.background = "#F1F5F9"; }}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>{g}</button>;
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+      {open && <SaleDrawer order={open} onClose={() => setOpen(null)} />}
+    </div>
+  );
+}
+
+// ─── Ventas › Reportes ──────────────────────────────────────────────────────────
+// Mock de API: GET /orders/report?days=7|30|90&channel=all|ml|tn
+// Neto = suma de órdenes no canceladas. % de cancelación sobre el total de órdenes creadas.
+type ReportDay = { date: string; orders: number; net: number; by_channel: Record<SalesChannelKey, { orders: number; net: number }> };
+const salesReportApi = {
+  async get(p: { days: 7 | 30 | 90; channel: SalesChannelKey | "all" }) {
+    await wait(500);
+    const start = new Date(); start.setHours(0, 0, 0, 0); start.setDate(start.getDate() - (p.days - 1));
+    const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const days: ReportDay[] = Array.from({ length: p.days }, (_, i) => { const d = new Date(start); d.setDate(d.getDate() + i); return { date: key(d), orders: 0, net: 0, by_channel: { ml: { orders: 0, net: 0 }, tn: { orders: 0, net: 0 } } }; });
+    const idx = new Map(days.map((d, i) => [d.date, i]));
+    let cancelledCount = 0, cancelledAmount = 0;
+    SALE_ORDERS.forEach(o => {
+      if (p.channel !== "all" && o.channel !== p.channel) return;
+      const i = idx.get(key(new Date(o.created_at))); if (i === undefined) return;
+      if (o.status === "cancelled") { cancelledCount++; cancelledAmount += o.total; return; }
+      days[i].orders++; days[i].net += o.total;
+      days[i].by_channel[o.channel].orders++; days[i].by_channel[o.channel].net += o.total;
+    });
+    const net = days.reduce((a, d) => a + d.net, 0), orders = days.reduce((a, d) => a + d.orders, 0);
+    const all = orders + cancelledCount;
+    const by_channel = (["ml", "tn"] as const).reduce((acc, c) => {
+      acc[c] = { net: days.reduce((a, d) => a + d.by_channel[c].net, 0), orders: days.reduce((a, d) => a + d.by_channel[c].orders, 0) };
+      return acc;
+    }, {} as Record<SalesChannelKey, { net: number; orders: number }>);
+    return {
+      days, by_channel, net, orders, orders_per_day: orders / p.days, avg_ticket: orders ? net / orders : 0,
+      cancelled: { count: cancelledCount, amount: cancelledAmount, pct: all ? (cancelledCount / all) * 100 : 0 },
+    };
+  },
+};
+
+const fmtCompact = (n: number) => n >= 1e6 ? `$${(n / 1e6).toFixed(1).replace(".", ",")} M` : n >= 1e3 ? `$${Math.round(n / 1e3)} k` : `$${Math.round(n)}`;
+const dayLabel = (iso: string, long = false) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  return long ? dt.toLocaleDateString("es-AR", { weekday: "short", day: "numeric", month: "short" }) : `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}`;
+};
+
+const CHANNEL_LINE: Record<SalesChannelKey, string> = { ml: "#F59E0B", tn: "#4F46E5" };
+
+function RevenueLineChart({ days, compare }: { days: ReportDay[]; compare?: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [w, setW] = useState(800);
+  const [hover, setHover] = useState<number | null>(null);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  const H = 280, pl = 56, pr = 16, pt = 16, pb = 28;
+  const iw = Math.max(10, w - pl - pr), ih = H - pt - pb;
+  const series = compare
+    ? (["ml", "tn"] as const).map(c => ({ key: c, color: CHANNEL_LINE[c], label: SALES_CHANNELS[c].name, net: days.map(d => d.by_channel[c].net), orders: days.map(d => d.by_channel[c].orders) }))
+    : [{ key: "all", color: "#4F46E5", label: "Total", net: days.map(d => d.net), orders: days.map(d => d.orders) }];
+  const rawMax = Math.max(1, ...series.flatMap(sr => sr.net));
+  const step = Math.pow(10, Math.floor(Math.log10(rawMax / 4)));
+  const tick = [1, 2, 2.5, 5, 10].map(m => m * step).find(s => s * 4 >= rawMax) ?? step * 10;
+  const max = tick * 4;
+  const x = (i: number) => pl + (days.length === 1 ? iw / 2 : (i / (days.length - 1)) * iw);
+  const y = (v: number) => pt + ih - (v / max) * ih;
+  const pathOf = (vals: number[]) => vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join("");
+  const area = `${pathOf(series[0].net)}L${x(days.length - 1)},${pt + ih}L${x(0)},${pt + ih}Z`;
+  const every = Math.ceil(days.length / Math.max(2, Math.floor(iw / 70)));
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const i = Math.round(((e.clientX - r.left - pl) / iw) * (days.length - 1));
+    setHover(Math.max(0, Math.min(days.length - 1, i)));
+  };
+  const hd = hover !== null ? days[hover] : null;
+  return (
+    <div ref={ref} className="relative w-full" style={{ height: H }}>
+      <svg width={w} height={H} onMouseMove={onMove} onMouseLeave={() => setHover(null)} className="block">
+        <defs>
+          <linearGradient id="rev-fill" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#4F46E5" stopOpacity="0.16" />
+            <stop offset="100%" stopColor="#4F46E5" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {[0, 1, 2, 3, 4].map(k => (
+          <g key={k}>
+            <line x1={pl} x2={w - pr} y1={y(tick * k)} y2={y(tick * k)} stroke={k ? "#F1F5F9" : "#E2E8F0"} />
+            <text x={pl - 10} y={y(tick * k)} dy="0.32em" textAnchor="end" fontSize="10.5" fill="#94A3B8" style={{ fontVariantNumeric: "tabular-nums" }}>{fmtCompact(tick * k)}</text>
+          </g>
+        ))}
+        {days.map((d, i) => (i % every === 0 || i === days.length - 1) && (days.length - 1 - i >= every / 2 || i === days.length - 1) ? (
+          <text key={d.date} x={x(i)} y={H - 8} textAnchor="middle" fontSize="10.5" fill="#94A3B8">{dayLabel(d.date)}</text>
+        ) : null)}
+        {!compare && <path d={area} fill="url(#rev-fill)" />}
+        {series.map(sr => <path key={sr.key} d={pathOf(sr.net)} fill="none" stroke={sr.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />)}
+        {hd && hover !== null && (
+          <g>
+            <line x1={x(hover)} x2={x(hover)} y1={pt} y2={pt + ih} stroke="#CBD5E1" strokeDasharray="3 3" />
+            {series.map(sr => <circle key={sr.key} cx={x(hover)} cy={y(sr.net[hover])} r="4.5" fill="white" stroke={sr.color} strokeWidth="2" />)}
+          </g>
+        )}
+      </svg>
+      {hd && hover !== null && (
+        <div className="absolute pointer-events-none rounded-xl bg-white px-3 py-2 shadow-lg" style={{
+          border: "1px solid #E2E8F0", top: Math.max(0, y(Math.max(...series.map(sr => sr.net[hover]))) - (compare ? 110 : 72)),
+          left: Math.min(Math.max(x(hover) - 90, 0), w - 180), width: 180,
+        }}>
+          <p className="text-[11px] font-semibold capitalize" style={{ color: "#64748B" }}>{dayLabel(hd.date, true)}</p>
+          {compare ? (
+            <div className="flex flex-col gap-1 mt-1">
+              {series.map(sr => (
+                <div key={sr.key} className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: sr.color }} />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[13px] font-bold tabular-nums" style={{ color: "#0A1628" }}>{fmt(sr.net[hover])}</span>
+                    <span className="block text-[10.5px]" style={{ color: "#94A3B8" }}>{sr.label} · {sr.orders[hover]} {sr.orders[hover] === 1 ? "orden" : "órdenes"}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (<>
+            <p className="text-sm font-bold tabular-nums" style={{ color: "#0A1628" }}>{fmt(hd.net)}</p>
+            <p className="text-[11px]" style={{ color: "#94A3B8" }}>{hd.orders} {hd.orders === 1 ? "orden" : "órdenes"}</p>
+          </>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Segmented<T extends string | number>({ value, onChange, options }: { value: T; onChange: (v: T) => void; options: { value: T; label: string }[] }) {
+  return (
+    <div className="flex items-center p-0.5 rounded-xl" style={{ background: "#F1F5F9" }}>
+      {options.map(o => {
+        const on = o.value === value;
+        return (
+          <button key={String(o.value)} onClick={() => onChange(o.value)} className="px-3 py-1.5 rounded-[10px] text-xs font-semibold transition-all whitespace-nowrap"
+            style={{ background: on ? "white" : "transparent", color: on ? "#0A1628" : "#64748B", boxShadow: on ? "0 1px 2px rgba(15,23,42,0.08)" : "none" }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const ICON_TICKET = <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M2.5 4.5h11v2a1.5 1.5 0 0 0 0 3v2h-11v-2a1.5 1.5 0 0 0 0-3v-2Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M9.5 4.5v7" stroke="currentColor" strokeWidth="1.3" strokeDasharray="1.5 1.5" /></svg>;
+const ICON_MONEY = <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="1.8" y="4" width="12.4" height="8" rx="1.8" stroke="currentColor" strokeWidth="1.4" /><circle cx="8" cy="8" r="1.8" stroke="currentColor" strokeWidth="1.4" /></svg>;
+
+function VentasReportes({ tabs }: { tabs: ReactNode }) {
+  const [days, setDays] = useState<7 | 30 | 90>(30);
+  const [channel, setChannel] = useState<SalesChannelKey | "all">("all");
+  const [compare, setCompare] = useState(false);
+  const [data, setData] = useState<Awaited<ReturnType<typeof salesReportApi.get>> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError(null);
+    salesReportApi.get({ days, channel })
+      .then(r => { if (alive) setData(r); })
+      .catch(e => { if (alive) setError(e instanceof Error ? e.message : "No pudimos cargar el reporte."); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [days, channel, reload]);
+
+  const pct = (n: number) => `${n.toFixed(1).replace(".", ",")}%`;
+  const stats: Stat[] = [
+    { label: "Total facturado", value: data ? fmt(data.net) : "—", sub: "neto", tone: "#4F46E5", icon: ICON_MONEY },
+    { label: "Órdenes", value: data ? data.orders.toLocaleString("es-AR") : "—", sub: data ? `${data.orders_per_day.toFixed(1).replace(".", ",")}/día` : undefined, tone: "#0EA5E9", icon: ICON_LIST },
+    { label: "Ticket promedio", value: data ? fmt(Math.round(data.avg_ticket)) : "—", tone: "#16A34A", icon: ICON_TICKET },
+    { label: "Cancelaciones", value: data ? data.cancelled.count : "—", sub: data ? `${fmt(data.cancelled.amount)} · ${pct(data.cancelled.pct)}` : undefined, tone: "#DC2626", icon: ICON_X },
+  ];
+  const empty = data && data.orders === 0 && data.cancelled.count === 0;
+
+  return (
+    <div className="flex flex-col flex-1 min-w-0 min-h-0">
+      <header className="flex items-center justify-between gap-3 px-6 py-3 flex-shrink-0 bg-white flex-wrap" style={{ borderBottom: "1px solid #E2E8F0" }}>
+        <Segmented value={days} onChange={setDays} options={[{ value: 7, label: "7 días" }, { value: 30, label: "30 días" }, { value: 90, label: "90 días" }]} />
+        <div className="flex items-center gap-3">
+          <Segmented value={channel} onChange={v => { setChannel(v); if (v !== "all") setCompare(false); }} options={[{ value: "all", label: "Todos" }, { value: "ml", label: "MercadoLibre" }, { value: "tn", label: "Tienda Nube" }]} />
+          <button role="switch" aria-checked={compare} onClick={() => { setCompare(c => !c); setChannel("all"); }}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors"
+            style={{ border: `1.5px solid ${compare ? "#4F46E5" : "#E2E8F0"}`, background: compare ? "#EEF2FF" : "white", color: compare ? "#4F46E5" : "#475569" }}>
+            <span className="relative w-6 h-3.5 rounded-full transition-colors" style={{ background: compare ? "#4F46E5" : "#CBD5E1" }}>
+              <span className="absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white transition-all" style={{ left: compare ? 12 : 2 }} />
+            </span>
+            Comparar canales
+          </button>
+        </div>
+      </header>
+
+      <div className="flex-1 overflow-auto flex flex-col p-5 min-h-0 gap-3">
+        <div className="flex items-center gap-4 flex-shrink-0">
+          <h1 className="text-base font-bold" style={{ color: "#0A1628" }}>Ventas</h1>
+          {tabs}
+        </div>
+
+        {error ? (
+          <div className="rounded-2xl bg-white" style={{ border: "1px solid #E2E8F0" }}>
+            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center px-6">
+              <p className="text-sm font-semibold" style={{ color: "#0A1628" }}>No pudimos cargar el reporte</p>
+              <p className="text-xs" style={{ color: "#64748B" }}>{error}</p>
+              <button onClick={() => setReload(n => n + 1)} className="mt-1 px-3 py-1.5 rounded-xl text-xs font-semibold" style={{ border: "1px solid #E2E8F0", color: "#4F46E5" }}>Reintentar</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto flex-shrink-0">
+              <div className="min-w-[680px]" style={{ opacity: loading && data ? 0.55 : 1, transition: "opacity .15s" }}>
+                {loading && !data ? (
+                  <div className="flex rounded-2xl bg-white overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
+                    {[0, 1, 2, 3].map(i => (
+                      <div key={i} className="flex-1 flex items-center gap-3 px-4 py-3" style={{ borderLeft: i ? "1px solid #F1F5F9" : "none" }}>
+                        <span className="w-9 h-9 rounded-xl animate-pulse" style={{ background: "#F1F5F9" }} />
+                        <div className="flex flex-col gap-1.5"><span className="h-4 w-20 rounded animate-pulse" style={{ background: "#F1F5F9" }} /><span className="h-3 w-14 rounded animate-pulse" style={{ background: "#F1F5F9" }} /></div>
+                      </div>
+                    ))}
+                  </div>
+                ) : <StatStrip stats={stats} />}
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-white flex-shrink-0" style={{ border: "1px solid #E2E8F0" }}>
+              <div className="flex items-baseline justify-between gap-3 px-5 pt-4 pb-2">
+                <div>
+                  <h2 className="text-sm font-semibold" style={{ color: "#0A1628" }}>Ingresos por día</h2>
+                  <p className="text-xs" style={{ color: "#94A3B8" }}>Monto neto · últimos {days} días{compare ? " · por canal" : channel !== "all" ? ` · ${SALES_CHANNELS[channel].name}` : ""}</p>
+                </div>
+                {compare && data && (
+                  <div className="flex items-center gap-5">
+                    {(["ml", "tn"] as const).map(c => (
+                      <div key={c} className="flex items-start gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full mt-1" style={{ background: CHANNEL_LINE[c] }} />
+                        <div>
+                          <p className="text-[11px] font-medium" style={{ color: "#64748B" }}>{SALES_CHANNELS[c].name}</p>
+                          <p className="text-sm font-bold tabular-nums" style={{ color: "#0A1628" }}>
+                            {fmt(data.by_channel[c].net)}{" "}
+                            <span className="text-[11px] font-medium" style={{ color: "#94A3B8" }}>{data.net ? Math.round((data.by_channel[c].net / data.net) * 100) : 0}% · {data.by_channel[c].orders} órd.</span>
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="px-3 pb-3">
+                {loading && !data ? <div style={{ height: 280 }} className="flex items-center justify-center"><SpinnerText children="Cargando reporte…" /></div>
+                  : empty ? (
+                    <div style={{ height: 280 }} className="flex flex-col items-center justify-center gap-1 text-center">
+                      <p className="text-sm font-semibold" style={{ color: "#0A1628" }}>Sin datos en el rango</p>
+                      <p className="text-xs" style={{ color: "#94A3B8" }}>Probá con un rango más amplio u otro canal.</p>
+                    </div>
+                  ) : data && <div style={{ opacity: loading ? 0.55 : 1, transition: "opacity .15s" }}><RevenueLineChart days={data.days} compare={compare} /></div>}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Ventas() {
+  const [tab, setTab] = useState<"ordenes" | "reportes">("ordenes");
+  const tabs = (
+    <div className="flex items-center gap-5" role="tablist">
+      {([["ordenes", "Órdenes"], ["reportes", "Reportes"]] as const).map(([k, l]) => (
+        <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)} className="py-1 text-xs font-semibold transition-colors"
+          style={{ color: tab === k ? "#0A1628" : "#94A3B8", borderBottom: `2px solid ${tab === k ? "#4F46E5" : "transparent"}` }}>
+          {l}
+        </button>
+      ))}
+    </div>
+  );
+  return tab === "ordenes" ? <VentasOrdenes tabs={tabs} /> : <VentasReportes tabs={tabs} />;
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -5967,6 +6272,44 @@ const loadImsConfigs = (): ImsConfigs => {
   try { return JSON.parse(localStorage.getItem(IMS_CONFIG_KEY) || "{}") as ImsConfigs; }
   catch { return {}; }
 };
+// Momento en que una venta descuenta stock en el IMS (aplica a cualquier sistema conectado).
+type StockSyncTrigger = "confirmed" | "paid";
+const IMS_TRIGGER_KEY = "omnipanel.ims.sync_trigger";
+const STOCK_SYNC_TRIGGERS: { key: StockSyncTrigger; title: string; desc: string; note: string }[] = [
+  { key: "paid", title: "Cuando la orden se paga", desc: "Descuenta stock recién con el pago acreditado.", note: "Recomendado · evita mover stock por órdenes que nunca se pagan." },
+  { key: "confirmed", title: "Cuando la orden se confirma", desc: "Reserva el stock apenas entra la orden, antes del pago.", note: "Evita sobreventas. Si la orden se cancela, el stock se revierte automáticamente." },
+];
+
+function StockSyncTriggerPicker() {
+  const [value, setValue] = useState<StockSyncTrigger>(() => (localStorage.getItem(IMS_TRIGGER_KEY) as StockSyncTrigger) || "paid");
+  const pick = (v: StockSyncTrigger) => { setValue(v); try { localStorage.setItem(IMS_TRIGGER_KEY, v); } catch { /* ignore */ } };
+  return (
+    <div className="mb-6">
+      <p style={{ fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#94A3B8" }} className="mb-1">Sincronización de ventas</p>
+      <p className="text-xs mb-2.5" style={{ color: "#64748B" }}>Elegí en qué momento una venta de MercadoLibre o Tienda Nube descuenta stock. Aplica a cualquier sistema conectado.</p>
+      <div role="radiogroup" className="grid gap-2.5 sm:grid-cols-2">
+        {STOCK_SYNC_TRIGGERS.map(t => {
+          const on = value === t.key;
+          return (
+            <button key={t.key} role="radio" aria-checked={on} onClick={() => pick(t.key)}
+              className="text-left flex gap-3 rounded-xl px-4 py-3 transition-colors"
+              style={{ border: `1.5px solid ${on ? "#4F46E5" : "#E2E8F0"}`, background: on ? "#FBFBFF" : "white", boxShadow: on ? "0 0 0 3px rgba(79,70,229,0.08)" : "none" }}>
+              <span className="mt-0.5 w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center" style={{ border: `1.5px solid ${on ? "#4F46E5" : "#CBD5E1"}` }}>
+                {on && <span className="w-2 h-2 rounded-full" style={{ background: "#4F46E5" }} />}
+              </span>
+              <span className="flex flex-col gap-0.5 min-w-0">
+                <span className="text-sm font-semibold" style={{ color: "#0A1628" }}>{t.title}</span>
+                <span className="text-xs" style={{ color: "#475569" }}>{t.desc}</span>
+                <span className="text-[11px] mt-1" style={{ color: "#94A3B8" }}>{t.note}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const saveImsConfigs = (c: ImsConfigs) => { try { localStorage.setItem(IMS_CONFIG_KEY, JSON.stringify(c)); } catch { /* ignore */ } };
 
 function ImsSettings() {
@@ -6000,6 +6343,8 @@ function ImsSettings() {
           <p className="text-sm max-w-md" style={{ color: "#64748B" }}>Conectá tu sistema de gestión de stock para que las ventas de tus canales actualicen el inventario automáticamente.</p>
         </div>
       )}
+
+      <StockSyncTriggerPicker />
 
       {/* Catálogo de sistemas disponibles */}
       <p style={{ fontSize: "10px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#94A3B8" }} className="mb-2">Sistemas disponibles</p>
@@ -7208,6 +7553,10 @@ const PROMPT_DEFS: PromptDef[] = [
     text: "A partir del nombre y la descripción del producto, indicá únicamente la marca. Si no podés determinarla con certeza, respondé \"Genérico\"." },
   { key: "ai_generate_model", group: "Generación de contenido", label: "Detectar modelo", desc: "Infiere el modelo cuando el campo está vacío.",
     text: "A partir del nombre y la descripción del producto, indicá únicamente el modelo o versión. Si no existe, generá un código de modelo corto basado en el nombre." },
+  { key: "ai_category", group: "Publicación", label: "Sugerir categoría", desc: "Elige la categoría del marketplace más adecuada.",
+    text: "Dada la información del producto, seleccioná la categoría de MercadoLibre más específica y correcta. Devolvé el id de categoría y su ruta completa." },
+  { key: "ai_auditor", group: "Publicación", label: "Auditor de publicación", desc: "Revisa la calidad de la publicación antes de publicar.",
+    text: "Actuá como auditor de calidad. Revisá título, descripción, fotos y atributos, y devolvé una lista de mejoras concretas priorizadas por impacto en las ventas." },
   { key: "cs_tone", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Tono base", desc: "Cómo suena la marca al responder preguntas y mensajes.",
     text: "Respondé con tono cercano y profesional, en español rioplatense (voseo). Saludá por el nombre del comprador, andá al punto y cerrá con un saludo breve." },
   { key: "cs_rules", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Reglas", desc: "Lo que la IA nunca debe hacer al responder compradores.",
@@ -7220,6 +7569,8 @@ const PROMPT_DEFS: PromptDef[] = [
     text: "Revisá el borrador contra las reglas y los datos del producto. Devolvé verdict (approved | corrected), score de 0 a 1 y la lista de objeciones. Si corregís, devolvé el texto corregido." },
   { key: "ai_improving_human_reply", group: "Atención al cliente · Mensajes de MercadoLibre", label: "Mejorar respuesta humana", desc: "Pulir la respuesta escrita por un operador antes de enviarla.",
     text: "Mejorá la redacción de la respuesta del vendedor manteniendo el sentido original. Corregí ortografía, hacela clara y amable, y conservá los datos concretos (precios, plazos, stock)." },
+  { key: "ai_inventory_search", group: "Búsqueda e inventario", label: "Búsqueda de inventario", desc: "Interpreta búsquedas en lenguaje natural sobre el inventario.",
+    text: "Convertí la consulta del usuario en filtros de inventario (marca, categoría, rango de precio, stock). Devolvé un JSON con los filtros detectados." },
   { key: "ai_general", group: "General", label: "Prompt general", desc: "Contexto base que se antepone a todas las tareas de IA.",
     text: "Sos el asistente de Omnipanel para un vendedor de e-commerce en Argentina. Respondé siempre en español rioplatense, de forma concisa y accionable. No inventes datos que no estén disponibles." },
   { key: "rules", group: "General", label: "Reglas", desc: "Restricciones y políticas que la IA debe respetar siempre.",
@@ -7564,9 +7915,7 @@ function AdminLogin({ onLogin }: { onLogin: (s: { token: string; admin: typeof A
     <div className="flex items-center justify-center h-screen" style={{ background: "#F1F5F9", fontFamily: "'Inter', sans-serif" }}>
       <div className="w-full max-w-sm rounded-2xl bg-white p-8 flex flex-col gap-5" style={{ boxShadow: "0 24px 60px rgba(15,23,42,0.12)" }}>
         <div className="flex flex-col items-center gap-2 text-center">
-          <div className="flex items-center justify-center rounded-2xl" style={{ width: 48, height: 48, background: "#4F46E5" }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.2-2.9 7.4-7 8.5-4.1-1.1-7-4.3-7-8.5V6l7-3Z" stroke="white" strokeWidth="1.8" strokeLinejoin="round" /><path d="M9 12l2 2 4-4.5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
-          </div>
+          <img src={omnipanelLogo} alt="Omnipanel" className="h-11 w-auto mb-3" />
           <h1 className="text-lg font-bold" style={{ color: "#0A1628" }}>Panel de administración</h1>
           <p style={{ fontSize: "12px", color: "#64748B" }}>Ingresá con tu cuenta de administrador de la plataforma.</p>
         </div>
@@ -7821,13 +8170,9 @@ function AdminBusinesses({ admin, onLogout }: { admin: typeof ADMIN_ME; onLogout
       {/* Top bar */}
       <header className="flex items-center justify-between gap-3 px-6 py-3 flex-shrink-0 bg-white" style={{ borderBottom: "1px solid #E2E8F0" }}>
         <div className="flex items-center gap-2.5">
-          <div className="flex items-center justify-center rounded-xl" style={{ width: 32, height: 32, background: "#4F46E5" }}>
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.2-2.9 7.4-7 8.5-4.1-1.1-7-4.3-7-8.5V6l7-3Z" stroke="white" strokeWidth="1.8" strokeLinejoin="round" /></svg>
-          </div>
-          <div className="leading-tight">
-            <p className="text-sm font-bold" style={{ color: "#0A1628" }}>Panel de administración</p>
-            <p style={{ fontSize: "11px", color: "#94A3B8" }}>Omnipanel · Plataforma</p>
-          </div>
+          <img src={omnipanelLogo} alt="Omnipanel" className="h-8 w-auto" />
+          <span className="w-px h-6" style={{ background: "#E2E8F0" }} />
+          <p className="text-sm font-semibold" style={{ color: "#475569" }}>Panel de administración</p>
         </div>
         <div className="flex items-center gap-3">
           <span style={{ fontSize: "12px", color: "#64748B" }}>{admin.email}</span>
@@ -7938,6 +8283,60 @@ function AdminApp() {
   return <AdminBusinesses admin={session.admin} onLogout={() => setSession(null)} />;
 }
 
+// ── Login del panel de negocio ──
+const BIZ_LOGIN = { email: "demo@omnipanel.com", password: "demo123" };
+const BIZ_SESSION_KEY = "omnipanel.biz.session";
+async function apiBizLogin(email: string, password: string) {
+  await wait(600);
+  if (email.trim().toLowerCase() !== BIZ_LOGIN.email || password !== BIZ_LOGIN.password) throw new ApiError(401, "invalid_credentials", "Email o contraseña incorrectos.");
+  return { token: uid("tok") };
+}
+
+function BusinessLogin({ onLogin }: { onLogin: (token: string) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const valid = /.+@.+\..+/.test(email.trim()) && password.length > 0;
+
+  const submit = async () => {
+    if (!valid || loading) return;
+    setLoading(true); setError(null);
+    try { onLogin((await apiBizLogin(email, password)).token); }
+    catch (e) { setError(errMsg(e)); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-screen px-4" style={{ background: "#F1F5F9", fontFamily: "'Inter', sans-serif" }}>
+      <div className="w-full max-w-sm rounded-2xl bg-white p-8 flex flex-col gap-5" style={{ boxShadow: "0 24px 60px rgba(15,23,42,0.12)" }}>
+        <div className="flex flex-col items-center gap-2 text-center">
+          <img src={omnipanelLogo} alt="Omnipanel" className="h-11 w-auto mb-3" />
+          <h1 className="text-lg font-bold" style={{ color: "#0A1628" }}>Ingresá a tu panel</h1>
+          <p style={{ fontSize: "12px", color: "#64748B" }}>Gestioná tus ventas, publicaciones y envíos en un solo lugar.</p>
+        </div>
+        {error && <AdminErrorNote>{error}</AdminErrorNote>}
+        <div className="flex flex-col gap-3.5" onKeyDown={e => { if (e.key === "Enter") submit(); }}>
+          <AdminField label="Email" value={email} onChange={setEmail} type="email" placeholder="vos@tunegocio.com" autoFocus />
+          <AdminField label="Contraseña" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
+        </div>
+        <button onClick={submit} disabled={!valid || loading}
+          className="px-4 py-2.5 rounded-xl text-sm font-bold text-white transition-colors"
+          style={{ background: valid && !loading ? "#4F46E5" : "#C7D2FE", cursor: valid && !loading ? "pointer" : "default" }}>
+          {loading ? "Ingresando…" : "Ingresar"}
+        </button>
+        <p className="text-center" style={{ fontSize: "10.5px", color: "#CBD5E1" }}>Demo: {BIZ_LOGIN.email} · {BIZ_LOGIN.password}</p>
+      </div>
+    </div>
+  );
+}
+
+function BusinessApp() {
+  const [token, setToken] = useState<string | null>(() => { try { return sessionStorage.getItem(BIZ_SESSION_KEY); } catch { return null; } });
+  if (!token) return <BusinessLogin onLogin={t => { try { sessionStorage.setItem(BIZ_SESSION_KEY, t); } catch { /* sin storage */ } setToken(t); }} />;
+  return <Dashboard />;
+}
+
 export default function App() {
   const [route, setRoute] = useState(() => window.location.hash);
   useEffect(() => {
@@ -7946,5 +8345,5 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
   if (route.startsWith("#/admin")) return <AdminApp />;
-  return <Dashboard />;
+  return <BusinessApp />;
 }

@@ -23,7 +23,7 @@ DROP TABLE IF EXISTS
     mercadolibre.claims,
     mercadolibre.payments,
     mercadolibre.invoices,
-    mercadolibre.size_grid,
+    mercadolibre.size_grids,
     mercadolibre.attributes,
     mercadolibre.variation_listings,
     mercadolibre.product_listings,
@@ -377,11 +377,6 @@ CREATE TABLE mercadolibre.attributes (
     buying_mode VARCHAR(50) DEFAULT 'buy_it_now',
     condition_type VARCHAR(50) DEFAULT 'new',
     currency_id VARCHAR(5) DEFAULT 'ARS',
-    -- DEPRECADA 28/09: solo la escriben/leen los flujos webhook deprecados
-    -- (prepublish -> _generate_category_options y create_template en grid_size).
-    -- El dashboard busca categorías en vivo (GET /api/mercadolibre/categories).
-    -- Se dropea junto con la eliminación de esos flujos.
-    category_options JSON DEFAULT NULL,
     settings JSON DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -390,18 +385,30 @@ CREATE TABLE mercadolibre.attributes (
 );
 ```
 
+> 29/09: se eliminó la columna `category_options` (era del flujo webhook
+> deprecado). En Cloud SQL: `ALTER TABLE mercadolibre.attributes DROP COLUMN category_options;`
+
 ```sql
-CREATE TABLE mercadolibre.size_grid (
+-- Cache de REUSO de guías de talles creadas por Omnipanel: una guía por
+-- (cuenta, dominio, marca, género). El resultado por producto (SIZE_GRID_ID
+-- y SIZE_GRID_ROW_ID) vive en attributes.settings.user_input_value.
+CREATE TABLE mercadolibre.size_grids (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    attribute_id INT NOT NULL,
-    size_grid_id BIGINT DEFAULT NULL,
-    settings JSON DEFAULT NULL,
+    account_id INT NOT NULL,
+    domain_id VARCHAR(50) NOT NULL,
+    brand VARCHAR(255) NOT NULL,
+    gender VARCHAR(50) NOT NULL,
+    meli_grid_id VARCHAR(50) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (attribute_id) REFERENCES attributes(id) ON DELETE CASCADE,
-    UNIQUE KEY uq_size_grid_attribute (attribute_id)
+    FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_size_grids (account_id, domain_id, brand, gender)
 );
 ```
+
+> 29/09: se eliminó la tabla `mercadolibre.size_grid` (cache del template del
+> flujo deprecado) y se creó `mercadolibre.size_grids`. En Cloud SQL:
+> `DROP TABLE mercadolibre.size_grid;` + el CREATE de arriba.
 
 ```sql
 CREATE TABLE mercadolibre.orders (
@@ -411,12 +418,48 @@ CREATE TABLE mercadolibre.orders (
     status VARCHAR(50) NULL,
     data JSON DEFAULT NULL,
     pack_id VARCHAR(255) DEFAULT NULL,
+    channel_status VARCHAR(50) NULL,
+    status_history JSON NULL,
+    buyer_name VARCHAR(255) NULL,
+    buyer_external_id VARCHAR(50) NULL,
+    total DECIMAL(12,2) NULL,
+    currency VARCHAR(5) NULL,
+    date_created TIMESTAMP NULL,
+    link TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,
     UNIQUE KEY uq_order_account (account_id, order_id)
 );
 ```
+
+> Columnas del panel de ventas (02/10): se agregaron `channel_status`,
+> `status_history`, `buyer_name`, `buyer_external_id`, `total`, `currency`,
+> `date_created` y `link` a `mercadolibre.orders` y `tiendanube.orders`
+> (`payment_status` solo en tiendanube). En **Cloud SQL** correr una vez:
+>
+> ```sql
+> ALTER TABLE mercadolibre.orders
+>     ADD COLUMN channel_status VARCHAR(50) NULL,
+>     ADD COLUMN status_history JSON NULL,
+>     ADD COLUMN buyer_name VARCHAR(255) NULL,
+>     ADD COLUMN buyer_external_id VARCHAR(50) NULL,
+>     ADD COLUMN total DECIMAL(12,2) NULL,
+>     ADD COLUMN currency VARCHAR(5) NULL,
+>     ADD COLUMN date_created TIMESTAMP NULL,
+>     ADD COLUMN link TEXT NULL;
+>
+> ALTER TABLE tiendanube.orders
+>     ADD COLUMN channel_status VARCHAR(50) NULL,
+>     ADD COLUMN payment_status VARCHAR(50) NULL,
+>     ADD COLUMN status_history JSON NULL,
+>     ADD COLUMN buyer_name VARCHAR(255) NULL,
+>     ADD COLUMN buyer_external_id VARCHAR(50) NULL,
+>     ADD COLUMN total DECIMAL(12,2) NULL,
+>     ADD COLUMN currency VARCHAR(5) NULL,
+>     ADD COLUMN date_created TIMESTAMP NULL,
+>     ADD COLUMN link TEXT NULL;
+> ```
 
 -- ============================================================
 -- Webhook events de MercadoLibre (proyecciones planas)
@@ -709,6 +752,15 @@ CREATE TABLE tiendanube.orders (
     status VARCHAR(50) NULL,
     data JSON DEFAULT NULL,
     pack_id VARCHAR(255) DEFAULT NULL,
+    channel_status VARCHAR(50) NULL,
+    payment_status VARCHAR(50) NULL,
+    status_history JSON NULL,
+    buyer_name VARCHAR(255) NULL,
+    buyer_external_id VARCHAR(50) NULL,
+    total DECIMAL(12,2) NULL,
+    currency VARCHAR(5) NULL,
+    date_created TIMESTAMP NULL,
+    link TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,

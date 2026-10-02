@@ -3,6 +3,7 @@ import time
 import requests
 from app.utils.logger import logger
 from app.integrations.core.credentials import get_access_token
+from app.integrations.mercadolibre.size_grid import resolve_size_grid
 from app.db.helpers import get_one, execute, get_all
 from app.settings.config import (SCHEMA_INVENTORY, SCHEMA_MERCADOLIBRE)
 
@@ -31,13 +32,13 @@ def get_data_for_meli(product_id):
         + "a.dimensions, "
         + "a.drive_url, "
         + "b.id AS product_listing_id, "
+        + "b.account_id, "
         + "b.meli_id, "
         + "b.price AS price_meli, "
         + "b.catalog_product_id, "
         + "b.marketplace_item_id, "
         + "b.marketplace_status, "
         + "c.id AS attribute_id, "
-        + "c.category_options, "
         + "c.category_id, "
         + "c.currency_id, "
         + "c.buying_mode, "
@@ -301,6 +302,10 @@ def _missing_required_attributes(item_data):
     catalog = bool(item_data.get('catalog_product_id'))
     for group in settings:
         for item in group.get('attributes') or []:
+            # Los ids de la guía de talles los resuelve size_grid.py (no son
+            # campos del usuario): nunca cuentan como "requerido vacío".
+            if item.get('id') in ("SIZE_GRID_ID", "SIZE_GRID_ROW_ID"):
+                continue
             if catalog:
                 if not item.get('catalog_required'):
                     continue
@@ -313,41 +318,6 @@ def _missing_required_attributes(item_data):
             if val is None or str(val).strip() == '':
                 missing.append(str(item.get('name') or item.get('id')))
     return missing
-
-
-
-def _generate_category_options(attrb_id, prod_id, product_names, token):
-    """DEPRECATED (28/09): solo lo usa el prepublish del webhook interno.
-
-    El dashboard busca categorías en vivo vía GET /api/mercadolibre/categories.
-    Se mantiene funcional durante el período de prueba; si todo sigue OK se
-    elimina junto con prepublish().
-    """
-    logger.info("Generating Category Options")
-    for product_name in product_names:
-        logger.info(f"Trying Generating Category with name: {product_name}")
-        response = _meli_request("GET", "https://api.mercadolibre.com/sites/MLA/domain_discovery/search",
-            token, params={"q": product_name, "limit": 6}, timeout=30)
-        json.dumps(response.json(), ensure_ascii=False)
-
-        category_options = json.dumps(response.json(), ensure_ascii=False)
-        if category_options:
-            break
-
-    if response.status_code == 200:
-        data = {'category_options': category_options}
-        _update_record(attrb_id, data, ATTRIBUTES_TABLE)
-
-    else:
-        logger.error("Failed to create Category Options.")
-        error = json.dumps(response.json(), ensure_ascii=False)
-        data = {
-        'status': 'Failed to generate category options.', 
-        'reason': error, 
-        'remedy': 'None', 
-        }
-        _update_record(prod_id, data, PRODUCT_LISTING_TABLE)
-    return
 
 
 
@@ -482,44 +452,6 @@ def _settings_builder(attribute_id, category_id, price, token):
     _update_record(attribute_id, data, ATTRIBUTES_TABLE)
 
 
-
-
-def prepublish(payload):
-    """DEPRECATED (28/09): flujo del webhook interno reemplazado por la REST
-    API del dashboard (IA en /api/inventory/products/{id}/prepublish y
-    settings en /api/mercadolibre/configure). Se mantiene funcional durante
-    el período de prueba; si todo sigue OK se elimina."""
-    logger.warning(
-        "DEPRECATED: prepublish() called for product %s — este flujo será eliminado.",
-        payload.get("product_id"),
-    )
-    logger.info("Running Pre-Publish Action on Mercadolibre")
-
-    product_id = payload.get('product_id')
-    account_id = payload.get('account_id')
-    token = get_access_token(account_id).get('access_token')
-
-    product_data = get_data_for_meli(product_id)
-    product_names = [product_data["name_edited"], product_data["name"]]
-    price = product_data["price_meli"] or product_data["price"]
-    category_options = product_data['category_options']
-    category_id = product_data['category_id']
-    attribute_id = product_data['attribute_id']
-
-    if category_options is None or category_options=='[]':
-        _generate_category_options(attribute_id, product_id, product_names, token)
-
-    elif category_id is not None:
-        _settings_builder(attribute_id, category_id, price, token)
-    
-    elif category_id is None and category_options is not None:
-        data = json.dumps([{'Error': 'Para generar los settings es neceasario seleccionar una categoria y correr el evento de Pre-Publish.'}], ensure_ascii=False)
-        data = {'settings': data}
-        _update_record(attribute_id, data, ATTRIBUTES_TABLE)
-    return
-
-
-
 def publish(payload):
     """publish the item with a second try option"""
 
@@ -536,8 +468,39 @@ def publish(payload):
         return True
     
     logger.info("Step 2: Attempting to publish the product in mercadolibre.")
-    item_format = _aux_product_format(item_data)
     product_listing_id = item_data['product_listing_id']
+
+    # Validación previa: bloquear acá (mensaje claro) en vez de mandar el POST
+    # y recibir el rechazo confuso de Meli mezclando warnings con errores.
+    missing = _missing_required_attributes(item_data)
+    if missing:
+        logger.info("Publish blocked for %s: missing required attributes %s",
+                    product_id, missing)
+        _update_record(product_listing_id, {
+            'status': 'Failed to Publish.',
+            'reason': 'Completá los campos obligatorios de la categoría antes de publicar: '
+                      + ' · '.join(missing) + '.',
+            'remedy': 'None',
+            'catalog_product_id': None,
+        }, PRODUCT_LISTING_TABLE)
+        return None
+
+    # Guía de talles: las categorías de indumentaria exigen SIZE_GRID_ID +
+    # SIZE_GRID_ROW_ID. Se resuelve (reusa o crea) ANTES de armar el payload.
+    grid_error = resolve_size_grid(item_data, payload.get("config"))
+    if grid_error:
+        logger.info("Publish blocked for %s: %s", product_id, grid_error)
+        _update_record(product_listing_id, {
+            'status': 'Failed to Publish.',
+            'reason': grid_error,
+            'remedy': 'None',
+        }, PRODUCT_LISTING_TABLE)
+        return None
+
+    # Re-leer con los ids de la guía ya escritos en settings y armar el payload
+    # final (SIZE_GRID_ID / SIZE_GRID_ROW_ID viajan como atributos).
+    item_data = get_data_for_meli(product_id)
+    item_format = _aux_product_format(item_data)
 
     # Fase 2 (payload-of-record): qué se manda a Meli, visible en Cloud
     # Logging sin adivinar — modo catálogo/tradicional, ficha, GTIN,
@@ -557,21 +520,6 @@ def publish(payload):
         item_format.get("price"),
         item_format.get("available_quantity"),
     )
-
-    # Validación previa: bloquear acá (mensaje claro) en vez de mandar el POST
-    # y recibir el rechazo confuso de Meli mezclando warnings con errores.
-    missing = _missing_required_attributes(item_data)
-    if missing:
-        logger.info("Publish blocked for %s: missing required attributes %s",
-                    product_id, missing)
-        _update_record(product_listing_id, {
-            'status': 'Failed to Publish.',
-            'reason': 'Completá los campos obligatorios de la categoría antes de publicar: '
-                      + ' · '.join(missing) + '.',
-            'remedy': 'None',
-            'catalog_product_id': None,
-        }, PRODUCT_LISTING_TABLE)
-        return None
 
     step_start = time.monotonic()
     response = requests.post("https://api.mercadolibre.com/items", 

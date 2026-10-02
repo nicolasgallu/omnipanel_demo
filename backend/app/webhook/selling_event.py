@@ -2,8 +2,9 @@ from flask import Blueprint, request, jsonify
 
 from app import cache
 from app.integrations.core.credentials import get_account_owner, UnknownAccount
+from app.integrations.core.order_records import record_order
 from app.db.claims import claim, finish, fail
-from app.pipelines.sells import process_order
+from app.pipelines.sells import _business_config, process_order
 from app.utils.logger import logger, set_event_id
 
 from app.integrations.mercadolibre.orders import (
@@ -59,14 +60,21 @@ def _handle_meli(data):
         logger.error("Failed to fetch Meli order %s: %s", order_id, exc)
         return jsonify({"status": "error", "message": "fetch failed"}), 500
 
-    # 4. Derive the claim key from the REAL status (paid/cancelled).
+    # 4. Registrar la orden con el estado REAL del canal (best-effort: un
+    #    fallo de registro no debe impedir el sync de stock).
+    try:
+        record_order(account, "mercadolibre", order_id, order)
+    except Exception:
+        logger.exception("record_order failed for Meli order %s", order_id)
+
+    # 5. Derive the claim key from the REAL status + el trigger del negocio.
     #    Not actionable -> ack and stop.
-    event_type = derive_meli_event_type(order)
+    event_type = derive_meli_event_type(order, _stock_sync_trigger(account))
     if event_type is None:
         logger.info("Meli order %s not actionable; ignoring", order_id)
         return jsonify({"status": "ignored", "message": "status not actionable"}), 200
 
-    # 5. Everything ready: hand over to the shared claim+run tail.
+    # 6. Everything ready: hand over to the shared claim+run tail.
     return _claim_and_run(account, "mercadolibre", event_type, order_id, order)
 
 
@@ -97,14 +105,33 @@ def _handle_tnube(request, data):
         logger.error("Failed to fetch tnube order %s: %s", order_id, exc)
         return jsonify({"status": "error", "message": "fetch failed"}), 500
 
-    # 5. Derive the claim key from payment_status/status.
-    event_type = derive_tnube_event_type(order)
+    # 5. Registrar la orden con el estado REAL del canal (best-effort).
+    try:
+        record_order(account, "tiendanube", order_id, order)
+    except Exception:
+        logger.exception("record_order failed for tnube order %s", order_id)
+
+    # 6. Derive the claim key from payment_status/status + el trigger del negocio.
+    event_type = derive_tnube_event_type(order, _stock_sync_trigger(account))
     if event_type is None:
         logger.info("Tnube order %s not actionable; ignoring", order_id)
         return jsonify({"status": "ignored", "message": "status not actionable"}), 200
 
-    # 6. Same shared tail as Meli, different source key.
+    # 7. Same shared tail as Meli, different source key.
     return _claim_and_run(account, "tiendanube", event_type, order_id, order)
+
+
+def _stock_sync_trigger(account):
+    """Trigger global de descuento de stock: 'paid' (default) | 'confirmed'.
+
+    Vive en businesses.config.stock_sync.trigger; ausente/inválido -> 'paid'.
+    """
+    try:
+        config = _business_config(account)
+    except Exception:
+        config = {}
+    trigger = (config.get("stock_sync") or {}).get("trigger")
+    return trigger if trigger in ("paid", "confirmed") else "paid"
 
 
 

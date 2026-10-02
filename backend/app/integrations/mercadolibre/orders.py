@@ -18,14 +18,19 @@ def fetch_order(account, order_id):
     return response.json()
 
 
-def derive_event_type(order):
+def derive_event_type(order, trigger="paid"):
     """Map the order's REAL status to our claim key.
 
+    `trigger` = cuándo el business descuenta stock (config global):
+    - "paid" (default): solo ventas pagadas.
+    - "confirmed": descuenta desde que Meli confirma la orden.
     Returns 'order_paid', 'order_cancelled', or None (not actionable).
     """
     status = order.get("status")
-    if status == "paid":
-        return "order_paid"
     if status == "cancelled":
         return "order_cancelled"
+    if status == "paid":
+        return "order_paid"
+    if trigger == "confirmed" and status == "confirmed":
+        return "order_paid"
     return None

@@ -34,6 +34,9 @@ def handle(account, data):
         logger.warning("Could not fetch Meli claim %s: %s", external_id, exc)
         return
 
+    # Doc oficial (working-with-claims): el claim NO trae order_id; la orden
+    # relacionada vive en resource_id cuando resource == "order".
+    order_raw = payload.get("resource_id") if payload.get("resource") == "order" else None
     execute(
         "INSERT INTO " + CLAIMS_TABLE
         + " (account_id, external_id, order_id, status, data)"
@@ -43,7 +46,7 @@ def handle(account, data):
         {
             "account_id": account["id"],
             "external_id": str(external_id),
-            "order_id": str(payload.get("order_id")) if payload.get("order_id") else None,
+            "order_id": str(order_raw) if order_raw else None,
             "status": str(payload.get("status")) or None,
             "data": json.dumps(payload, ensure_ascii=False),
         },

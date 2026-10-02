@@ -287,11 +287,69 @@ function ImsProviderForm({
 
 type ImsConfigs = Partial<Record<ImsProviderKey, Record<string, string>>>
 
+// Momento en que una venta descuenta stock en el IMS (aplica a cualquier
+// sistema conectado). Se persiste en el backend (PATCH /settings/stock-sync/trigger).
+type StockSyncTrigger = 'paid' | 'confirmed'
+
+const STOCK_SYNC_TRIGGERS: { key: StockSyncTrigger; title: string; desc: string; note: string }[] = [
+  { key: 'paid', title: 'Cuando la orden se paga', desc: 'Descuenta stock recién con el pago acreditado.', note: 'Recomendado · evita mover stock por órdenes que nunca se pagan.' },
+  { key: 'confirmed', title: 'Cuando la orden se confirma', desc: 'Reserva el stock apenas entra la orden, antes del pago.', note: 'Evita sobreventas. Si la orden se cancela, el stock se revierte automáticamente.' },
+]
+
+function StockSyncTriggerPicker({
+  value,
+  busy,
+  onPick,
+}: {
+  value: StockSyncTrigger
+  busy: boolean
+  onPick: (v: StockSyncTrigger) => void
+}) {
+  return (
+    <div className="mb-6">
+      <p style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94A3B8' }} className="mb-1">
+        Sincronización de ventas
+      </p>
+      <p className="text-xs mb-2.5" style={{ color: '#64748B' }}>
+        Elegí en qué momento una venta de MercadoLibre o Tienda Nube descuenta stock. Aplica a cualquier sistema conectado.
+      </p>
+      <div role="radiogroup" className="grid gap-2.5 sm:grid-cols-2" style={{ opacity: busy ? 0.7 : 1 }}>
+        {STOCK_SYNC_TRIGGERS.map((t) => {
+          const on = value === t.key
+          return (
+            <button
+              key={t.key}
+              role="radio"
+              aria-checked={on}
+              disabled={busy}
+              onClick={() => onPick(t.key)}
+              className="text-left flex gap-3 rounded-xl px-4 py-3 transition-colors"
+              style={{ border: `1.5px solid ${on ? '#4F46E5' : '#E2E8F0'}`, background: on ? '#FBFBFF' : 'white', boxShadow: on ? '0 0 0 3px rgba(79,70,229,0.08)' : 'none' }}
+            >
+              <span className="mt-0.5 w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center" style={{ border: `1.5px solid ${on ? '#4F46E5' : '#CBD5E1'}` }}>
+                {on && <span className="w-2 h-2 rounded-full" style={{ background: '#4F46E5' }} />}
+              </span>
+              <span className="flex flex-col gap-0.5 min-w-0">
+                <span className="text-sm font-semibold" style={{ color: '#0A1628' }}>{t.title}</span>
+                <span className="text-xs" style={{ color: '#475569' }}>{t.desc}</span>
+                <span className="text-[11px] mt-1" style={{ color: '#94A3B8' }}>{t.note}</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function ImsSettings() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [configs, setConfigs] = useState<ImsConfigs>({})
   const [provider, setProvider] = useState<ImsProviderKey | null>(null)
+  const [trigger, setTrigger] = useState<StockSyncTrigger>('paid')
+  const [triggerBusy, setTriggerBusy] = useState(false)
+  const [triggerError, setTriggerError] = useState<string | null>(null)
   const active = IMS_PROVIDERS.find((p) => p.key === provider) ?? null
   const anyConnected = IMS_PROVIDERS.some((p) => Boolean(configs[p.key]))
 
@@ -303,6 +361,7 @@ export function ImsSettings() {
       .imsSettings()
       .then((res) => {
         if (cancelled) return
+        setTrigger(res.trigger === 'confirmed' ? 'confirmed' : 'paid')
         if (res.provider && res.provider !== 'none') {
           const known = IMS_PROVIDERS.some((p) => p.key === res.provider)
           if (known) {
@@ -320,6 +379,23 @@ export function ImsSettings() {
       cancelled = true
     }
   }, [])
+
+  // Optimista: aplica al toque y revierte si el PATCH falla.
+  const pickTrigger = async (v: StockSyncTrigger) => {
+    if (triggerBusy) return
+    const prev = trigger
+    setTrigger(v)
+    setTriggerError(null)
+    setTriggerBusy(true)
+    try {
+      await adminApi.imsTrigger(v)
+    } catch (err) {
+      setTrigger(prev)
+      setTriggerError(err instanceof Error ? err.message : 'No se pudo guardar el momento de sincronización.')
+    } finally {
+      setTriggerBusy(false)
+    }
+  }
 
   if (loading) {
     return (
@@ -367,6 +443,15 @@ export function ImsSettings() {
           <p className="text-sm max-w-md" style={{ color: '#64748B' }}>Conectá tu sistema de gestión de stock para que las ventas de tus canales actualicen el inventario automáticamente.</p>
         </div>
       )}
+
+      {triggerError && (
+        <div className="mb-4">
+          <ErrorBox message={triggerError} />
+        </div>
+      )}
+
+      {/* Momento de descuento de stock (aplica a cualquier IMS conectado). */}
+      <StockSyncTriggerPicker value={trigger} busy={triggerBusy} onPick={pickTrigger} />
 
       {/* Catálogo de sistemas disponibles */}
       <p style={{ fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94A3B8' }} className="mb-2">Sistemas disponibles</p>

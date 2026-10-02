@@ -21,6 +21,7 @@ import type {
   MLPerformance,
   MLSellingCosts,
   MLSettings,
+  SizeGridMeasure,
   MsgDetail,
   MsgListResponse,
   MsgReply,
@@ -44,6 +45,11 @@ import type {
   CsSettings,
   MsgKind,
   ReplyStatus,
+  SalesOrderDetail,
+  SalesQuery,
+  SalesReport,
+  ReportQuery,
+  SalesResponse,
 } from './types'
 
 export const authApi = {
@@ -142,6 +148,11 @@ export const adminApi = {
       method: 'POST',
       body,
     }),
+  imsTrigger: (trigger: 'paid' | 'confirmed') =>
+    api<{ status: string; trigger: string }>('/api/settings/stock-sync/trigger', {
+      method: 'PATCH',
+      body: { trigger },
+    }),
   imsTest: (body: { provider: string; config: Record<string, string> }) =>
     api<ImsTestResult>('/api/settings/stock-sync/test', {
       method: 'POST',
@@ -239,6 +250,11 @@ export const channelsApi = {
   mlSettings: (productId: number, accountId: number) =>
     api<MLSettings>(
       `/api/mercadolibre/settings${queryString({ product_id: productId, account_id: accountId })}`,
+    ),
+
+  mlSizeGridMeasures: (productId: number, accountId: number, gender: string) =>
+    api<{ measures: SizeGridMeasure[] }>(
+      `/api/mercadolibre/size-grid/measures${queryString({ product_id: productId, account_id: accountId, gender })}`,
     ),
 
   mlConfigure: (productId: number, accountId: number, categoryId: string, refresh = false) =>
@@ -383,4 +399,23 @@ export const supportApi = {
       method: 'POST',
       body: { subject, description, priority },
     }),
+}
+
+// ─── Ventas (panel de órdenes ML + Tienda Nube) ──────────────────────────────
+
+export const salesApi = {
+  list: (query: SalesQuery) =>
+    api<SalesResponse>(`/api/sales/orders${queryString(query)}`),
+
+  get: (platform: 'mercadolibre' | 'tiendanube', orderId: string) =>
+    api<SalesOrderDetail>(
+      `/api/sales/orders/${platform}/${encodeURIComponent(orderId)}`,
+    ),
+}
+
+// ─── Ventas › Reportes (vista Reportes) ──────────────────────────────────────
+
+export const salesReportApi = {
+  get: (query: ReportQuery) =>
+    api<SalesReport>(`/api/sales/report${queryString(query)}`),
 }

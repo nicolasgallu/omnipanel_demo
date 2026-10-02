@@ -40,6 +40,23 @@ def process_incoming(row_id):
     return msg_pipeline.process_incoming(row_id)
 
 
+def _buyer_nickname(token, user_id):
+    """Nickname del comprador vía GET /users/{id} (best-effort).
+
+    Las preguntas (GET /questions/{id}) traen `from` con solo {id,
+    answered_questions} — sin nombre. El nickname se busca aparte; si falla,
+    queda None (la fila igual se guarda y la UI muestra lo que haya)."""
+    try:
+        resp = _meli_request("GET", MELI_BASE_URL + "/users/" + str(user_id),
+                             token, timeout=30)
+        resp.raise_for_status()
+        user = resp.json() or {}
+        return user.get("nickname")
+    except Exception:
+        logger.warning("Could not fetch Meli user %s nickname", user_id)
+        return None
+
+
 def _upsert(account, data, kind):
     token = get_access_token(account["id"]).get("access_token")
     resource = data.get("resource") or ""
@@ -65,12 +82,15 @@ def _upsert(account, data, kind):
     last_text = None
 
     if kind == "question":
-        question = payload.get("question") or {}
-        status = question.get("status")
+        # GET /questions/{id} devuelve la pregunta PLANA (no anidada):
+        # {id, text, status, from: {id, ...}, item_id, ...}.
+        status = payload.get("status")
         from_user_id = (payload.get("from") or {}).get("id")
         sender = payload.get("from") or {}
         buyer_name = sender.get("nickname") or sender.get("name")
-        last_text = question.get("text")
+        last_text = payload.get("text")
+        if not buyer_name and from_user_id:
+            buyer_name = _buyer_nickname(token, from_user_id)
     else:
         msgs = payload.get("messages") or []
         if msgs:
@@ -130,7 +150,8 @@ def _maybe_process(kind, account, entity_id, payload):
     except LookupError:
         return
 
-    if row.get("reply_status") is None:
+    if not row.get("reply_status"):
+        # NULL o '' (esquemas viejos): la fila nunca fue procesada.
         try:
             process_incoming(row["id"])
         except Exception:
@@ -139,11 +160,11 @@ def _maybe_process(kind, account, entity_id, payload):
 
 def _sync_status(row, kind, payload):
     """Marca answered/closed cuando Meli ya lo resolvió por otro medio."""
-    if row.get("reply_status") is not None:
+    if row.get("reply_status"):
         return
     new_status = None
     if kind == "question":
-        q_status = (payload.get("question") or {}).get("status")
+        q_status = payload.get("status")
         if q_status == "ANSWERED":
             new_status = "answered"
         elif q_status in ("DELETED", "CLOSED_UNANSWERED", "BANNED", "DISABLED"):

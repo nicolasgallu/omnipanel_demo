@@ -135,6 +135,15 @@ export interface MLListingType {
 export interface MLSettings {
   category_id: string | null
   settings: MLSettingsGroup[]
+  // La categoría exige guía de talles (SIZE_GRID_ID en sus settings): el
+  // wizard muestra talle + medidas y el publish resuelve la guía automática.
+  size_grid_required?: boolean
+}
+
+export interface SizeGridMeasure {
+  id: string
+  name: string
+  unit: string
 }
 
 export interface MLSettingsItem {
@@ -423,6 +432,8 @@ export interface ScrapflySettings {
 export interface ImsSettingsInfo {
   provider: string
   config: Record<string, string>
+  // Momento en que una venta descuenta stock (aplica a cualquier IMS).
+  trigger: 'paid' | 'confirmed'
 }
 
 export interface ImsTestResult {
@@ -595,4 +606,120 @@ export interface TNCredentials {
   access_token: string | null
   // ID de la tienda (user_id del OAuth); la API lo usa en la URL /v1/{id}/...
   external_account_id: string | null
+}
+
+// ─── Ventas (contrato del panel: GET /api/sales/orders + /api/sales/report) ──
+
+export type SalesChannel = 'ml' | 'tn'
+export type OrderStatus = 'pending_payment' | 'paid' | 'delivered' | 'cancelled'
+export type StockSync = 'synced' | 'pending' | 'error' | 'not_applicable'
+
+// Movimiento en el sistema de stock por ítem: venta (descuenta) o
+// devolución (repone al cancelar). El comprobante solo existe en synced.
+export interface StockTransaction {
+  type: 'sale' | 'return'
+  status: 'synced' | 'pending' | 'error'
+  document_number: string | null
+}
+
+export interface SaleItem {
+  title: string
+  sku: string | null
+  quantity: number
+  unit_price: number | null
+  stock_transactions: StockTransaction[]
+}
+
+export interface SaleStatusEvent {
+  at: string
+  status: OrderStatus
+  raw_status: string | null
+}
+
+export interface SaleOrder {
+  id: string
+  number: string
+  channel: SalesChannel
+  created_at: string
+  updated_at: string
+  buyer_name: string | null
+  currency: string | null
+  total: number | null
+  url: string | null
+  status: OrderStatus
+  stock_sync: StockSync
+  items: SaleItem[]
+  history: SaleStatusEvent[]
+}
+
+export interface SalesCounts {
+  total: number
+  pending_payment: number
+  paid: number
+  delivered: number
+  cancelled: number
+}
+
+export interface SalesResponse {
+  items: SaleOrder[]
+  total: number
+  page: number
+  page_size: number
+  counts: SalesCounts
+}
+
+export interface OrderSyncMovement {
+  direction: 'sale' | 'reversal'
+  quantity: number
+  unit_price: number | null
+  status: string
+  provider_doc_id: string | null
+  error_message: string | null
+  created_at: string
+}
+
+export interface SalesOrderDetail {
+  order: SaleOrder
+  stock_sync: {
+    state: StockSync
+    movements: OrderSyncMovement[]
+  }
+}
+
+export type SalesQuery = {
+  q?: string
+  channel?: SalesChannel | 'all'
+  status?: OrderStatus | 'all'
+  page?: number
+  page_size?: number
+}
+
+// ─── Reporte de ventas (GET /api/sales/report) ──────────────────────────────
+
+export interface ReportDay {
+  date: string // YYYY-MM-DD (todos los días del rango, los vacíos en 0)
+  orders: number // órdenes no canceladas creadas ese día
+  net: number // suma de totales no cancelados
+  by_channel: {
+    ml: { orders: number; net: number }
+    tn: { orders: number; net: number }
+  }
+}
+
+export interface SalesReport {
+  days: ReportDay[]
+  net: number
+  orders: number
+  orders_per_day: number
+  avg_ticket: number
+  cancelled: { count: number; amount: number; pct: number }
+  by_channel: {
+    ml: { orders: number; net: number }
+    tn: { orders: number; net: number }
+  }
+}
+
+export type ReportQuery = {
+  days?: 7 | 30 | 90
+  channel?: SalesChannel | 'all'
 }

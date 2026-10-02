@@ -3,6 +3,7 @@
 // vincular/salir. Hablan con la API real (/api/mercadolibre/catalog/*).
 
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { catalogApi } from '../../lib/api/endpoints'
 import { fmtMoney } from '../../lib/format'
 import type { CatalogCompetition, CatalogProduct, MLListingType, Product, ProductListing } from '../../lib/api/types'
@@ -394,6 +395,7 @@ export function MLCatalogConfigStep({
   onRetryListingTypes,
   priceValue,
   onPriceChange,
+  beforeReadonly,
 }: {
   product: Product
   match: CatalogProduct | null
@@ -404,6 +406,7 @@ export function MLCatalogConfigStep({
   onRetryListingTypes: () => void
   priceValue?: string
   onPriceChange?: (v: string) => void
+  beforeReadonly?: ReactNode
 }) {
   const attrs = match ? matchAttrs(match) : null
   const readonly = match
@@ -450,6 +453,8 @@ export function MLCatalogConfigStep({
         ) : (
           <ListingTypePicker value={cfg.listing_type} onChange={(v) => set('listing_type', v)} items={listingTypes} accent={ACCENT} />
         )}
+
+        {beforeReadonly}
 
         {readonly.length > 0 && (
         <span className="text-xs font-semibold text-subtle">Definido por MercadoLibre</span>

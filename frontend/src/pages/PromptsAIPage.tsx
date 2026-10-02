@@ -4,7 +4,7 @@ import { usePermissions } from '../lib/auth'
 import { ErrorBox, SpinnerText, Toggle } from '../components/ui'
 import type { AiMode, CsSettings } from '../lib/api/types'
 
-type PromptDef = { key: string; label: string; desc: string; group: string; text: string }
+type PromptDef = { key: string; label: string; desc: string; group: string }
 
 const CS_PROMPT_GROUP = 'Atención al cliente · Mensajes de MercadoLibre'
 
@@ -14,70 +14,60 @@ const PROMPT_DEFS: PromptDef[] = [
     group: 'Generación de contenido',
     label: 'Generar título',
     desc: 'Redacta el título de la publicación a partir de los datos del producto.',
-    text: 'Sos un experto en marketplaces argentinos. Generá un título de venta claro y optimizado para SEO (máximo 60 caracteres) usando marca, modelo y características principales del producto. No uses mayúsculas sostenidas ni signos de exclamación.',
   },
   {
     key: 'ai_generate_description',
     group: 'Generación de contenido',
     label: 'Generar descripción',
     desc: 'Escribe la descripción completa de la publicación.',
-    text: 'Redactá una descripción de producto persuasiva y estructurada en párrafos cortos. Incluí beneficios, características técnicas y condiciones de uso. Tono profesional y cercano, en español rioplatense.',
   },
   {
     key: 'ai_generate_brand',
     group: 'Generación de contenido',
     label: 'Detectar marca',
     desc: 'Infiere la marca cuando el campo está vacío.',
-    text: 'A partir del nombre y la descripción del producto, indicá únicamente la marca. Si no podés determinarla con certeza, respondé "Genérico".',
   },
   {
     key: 'ai_generate_model',
     group: 'Generación de contenido',
     label: 'Detectar modelo',
     desc: 'Infiere el modelo cuando el campo está vacío.',
-    text: 'A partir del nombre y la descripción del producto, indicá únicamente el modelo o versión. Si no existe, generá un código de modelo corto basado en el nombre.',
   },
   {
     key: 'cs_tone',
     group: CS_PROMPT_GROUP,
     label: 'Tono base',
     desc: 'Cómo suena la marca al responder preguntas y mensajes.',
-    text: 'Respondé con tono cercano y profesional, en español rioplatense (voseo). Saludá por el nombre del comprador, andá al punto y cerrá con un saludo breve.',
   },
   {
     key: 'cs_rules',
     group: CS_PROMPT_GROUP,
     label: 'Reglas',
     desc: 'Lo que la IA nunca debe hacer al responder compradores.',
-    text: 'No compartas datos de contacto ni pidas datos personales fuera de la mensajería. No prometas plazos ni envíos gratis que no estén configurados. No respondas reclamos, devoluciones ni temas legales: derivalos a una persona.',
   },
   {
     key: 'cs_classifier',
     group: CS_PROMPT_GROUP,
     label: 'Clasificador',
     desc: 'Decide si el mensaje lo puede responder la IA o requiere una persona.',
-    text: 'Clasificá el mensaje en: consulta_producto, envio, facturacion, post_venta, reclamo, devolucion, datos_personales u otro. Devolvé la categoría y si requiere humano (true/false) con un motivo corto.',
   },
   {
     key: 'cs_writer',
     group: CS_PROMPT_GROUP,
     label: 'Redactor de respuestas',
     desc: 'Escribe el borrador usando datos reales del producto y del catálogo.',
-    text: 'Redactá una respuesta de máximo 350 caracteres usando solo datos del producto (precio, stock, atributos) y del catálogo del vendedor. Si citás otro producto, incluí nombre, precio y stock. Si te falta un dato, decí que lo consultás.',
   },
   {
     key: 'cs_auditor',
     group: CS_PROMPT_GROUP,
     label: 'Auditor de respuestas',
     desc: 'Valida el borrador antes de mostrarlo o enviarlo.',
-    text: 'Revisá el borrador contra las reglas y los datos del producto. Devolvé verdict (approved | corrected), score de 0 a 1 y la lista de objeciones. Si corregís, devolvé el texto corregido.',
   },
   {
     key: 'ai_improving_human_reply',
     group: CS_PROMPT_GROUP,
     label: 'Mejorar respuesta humana',
     desc: 'Pulir la respuesta escrita por un operador antes de enviarla.',
-    text: 'Mejorá la redacción de la respuesta del vendedor manteniendo el sentido original. Corregí ortografía, hacela clara y amable, y conservá los datos concretos (precios, plazos, stock).',
   },
 ]
 
@@ -289,10 +279,11 @@ function PromptCard({
 
 export function PromptsAIPage() {
   const { isBusiness } = usePermissions()
-  const [saved, setSaved] = useState<Record<string, string>>(() =>
-    Object.fromEntries(PROMPT_DEFS.map((d) => [d.key, d.text])),
-  )
-  const [draft, setDraft] = useState<Record<string, string>>(saved)
+  // Sin defaults propios: los textos SIEMPRE vienen del backend (el GET de
+  // /api/ai/prompts devuelve los defaults reales del sistema cuando la DB
+  // está vacía). Un solo lugar de verdad.
+  const [saved, setSaved] = useState<Record<string, string>>({})
+  const [draft, setDraft] = useState<Record<string, string>>({})
   const [settings, setSettings] = useState<CsSettings>({ mode: 'suggest', min_confidence: 75, audit: true })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -303,16 +294,13 @@ export function PromptsAIPage() {
     aiApi
       .getPrompts()
       .then((res) => {
-        const merged = { ...saved }
-        for (const k of PROMPT_DEFS.map((d) => d.key)) {
-          if (res.prompts[k]) merged[k] = res.prompts[k]
-        }
-        setSaved(merged)
-        setDraft(merged)
+        const prompts = res.prompts ?? {}
+        setSaved(prompts)
+        setDraft(prompts)
         setSettings(res.settings)
       })
       .catch(() => {
-        /* sin backend: quedan los defaults */
+        // sin backend: los campos quedan vacíos (no inventamos defaults)
       })
       .finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -405,12 +393,12 @@ export function PromptsAIPage() {
               <PromptCard
                 key={def.key}
                 def={def}
-                value={draft[def.key]}
+                value={draft[def.key] ?? ''}
                 dirty={draft[def.key] !== saved[def.key]}
                 saving={savingKey === def.key}
                 onChange={(v) => setDraft((d) => ({ ...d, [def.key]: v }))}
                 onSave={() => saveOne(def.key)}
-                onReset={() => setDraft((d) => ({ ...d, [def.key]: saved[def.key] }))}
+                onReset={() => setDraft((d) => ({ ...d, [def.key]: saved[def.key] ?? '' }))}
               />
             ))}
           </div>

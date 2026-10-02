@@ -320,6 +320,14 @@ CREATE TABLE IF NOT EXISTS mercadolibre.orders (
     status VARCHAR(50) NULL,
     data JSON DEFAULT NULL,
     pack_id VARCHAR(255) DEFAULT NULL,
+    channel_status VARCHAR(50) NULL,           -- estado crudo del canal
+    status_history JSON NULL,                  -- track append-only (un evento por cambio real)
+    buyer_name VARCHAR(255) NULL,
+    buyer_external_id VARCHAR(50) NULL,
+    total DECIMAL(12,2) NULL,
+    currency VARCHAR(5) NULL,
+    date_created TIMESTAMP NULL,               -- fecha de la orden en el canal
+    link TEXT NULL,                            -- url de la orden en ML/TN
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,
@@ -553,6 +561,15 @@ CREATE TABLE IF NOT EXISTS tiendanube.orders (
     status VARCHAR(50) NULL,
     data JSON DEFAULT NULL,
     pack_id VARCHAR(255) DEFAULT NULL,
+    channel_status VARCHAR(50) NULL,           -- estado crudo del canal
+    payment_status VARCHAR(50) NULL,           -- pending|authorized|paid|voided|refunded
+    status_history JSON NULL,                  -- track append-only (un evento por cambio real)
+    buyer_name VARCHAR(255) NULL,
+    buyer_external_id VARCHAR(50) NULL,
+    total DECIMAL(12,2) NULL,
+    currency VARCHAR(5) NULL,
+    date_created TIMESTAMP NULL,               -- fecha de la orden en el canal
+    link TEXT NULL,                            -- url de la orden en TN
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,

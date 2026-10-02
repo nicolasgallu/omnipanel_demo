@@ -41,6 +41,7 @@ from app.db.engine import engine
 from app.db.helpers import execute, get_all, get_one, insert_and_get_id, stream_rows
 from app.integrations.core.credentials import get_access_token
 from app.integrations.mercadolibre.product_handler import _meli_request, _settings_builder
+from app.integrations.mercadolibre.size_grid import grid_required
 from app.integrations.tiendanube.product_handler import create_categories
 from app.pipelines.publish import pipeline_publish
 from app.settings.config import SCHEMA_ACCOUNTS
@@ -420,9 +421,63 @@ def ml_settings_get():
             except Exception:
                 logger.exception("Lazy settings rebuild failed for product %s",
                                  product_id)
-        return jsonify({"category_id": row.get("category_id"), "settings": settings})
+        return jsonify({
+            "category_id": row.get("category_id"),
+            "settings": settings,
+            # La categoría exige guía de talles (SIZE_GRID_ID aparece en sus
+            # settings): el wizard muestra el talle + las medidas y el publish
+            # resuelve la guía automáticamente (app/integrations/mercadolibre/
+            # size_grid.py).
+            "size_grid_required": grid_required(settings),
+        })
     except LookupError:
-        return jsonify({"category_id": None, "settings": []})
+        return jsonify({"category_id": None, "settings": [],
+                        "size_grid_required": False})
+
+
+@channels_bp.route("/mercadolibre/size-grid/measures", methods=["GET"])
+@require_auth
+def ml_size_grid_measures():
+    """Medidas requeridas por la guía de talles de la categoría (para que el
+    wizard las muestre como campos numéricos). Se resuelven desde el template
+    del dominio de Meli (technical_specs?section=grids)."""
+    product_id = request.args.get("product_id", type=int)
+    account_id = request.args.get("account_id", type=int)
+    gender = (request.args.get("gender") or "").strip()
+    product = _owned_product(product_id)
+    if product is None:
+        return jsonify({"error": "not_found", "message": "Producto no encontrado"}), 404
+    account = _owned_account(account_id, "mercadolibre")
+    if account is None:
+        return _bad("Cuenta de MercadoLibre no encontrada")
+    token = _account_token(account_id)
+    if not token:
+        return _bad("La cuenta no tiene credenciales de MercadoLibre")
+
+    try:
+        listing = get_one(
+            "SELECT id FROM " + ML_LISTINGS_TABLE + " WHERE product_id = :p",
+            {"p": product_id})
+        row, settings = _ml_settings(listing["id"])
+        category_id = row.get("category_id")
+    except LookupError:
+        return jsonify({"measures": []})
+    if not category_id or not gender or not grid_required(settings):
+        return jsonify({"measures": []})
+
+    try:
+        from app.integrations.mercadolibre.size_grid import (
+            _category_domain, _grid_spec)
+        domain_id = _category_domain(category_id, token)
+        if not domain_id:
+            return jsonify({"measures": []})
+        _, _, measures, _ = _grid_spec(
+            domain_id, gender, product.get("brand") or "Genérico", token)
+        return jsonify({"measures": measures})
+    except Exception:
+        logger.exception("Could not load size grid measures for product %s",
+                         product_id)
+        return jsonify({"measures": []})
 
 
 @channels_bp.route("/mercadolibre/configure", methods=["POST"])

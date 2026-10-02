@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   categories: vi.fn(),
   settings: vi.fn(),
+  salesList: vi.fn(),
 }))
 
 vi.mock('./lib/api/endpoints', () => ({
@@ -61,6 +62,8 @@ vi.mock('./lib/api/endpoints', () => ({
   },
   credentialsApi: { meli: vi.fn(), saveMeli: vi.fn(), tn: vi.fn(), saveTn: vi.fn() },
   supportApi: { createTicket: vi.fn() },
+  salesApi: { list: mocks.salesList, get: vi.fn() },
+  salesReportApi: { get: vi.fn() },
 }))
 
 const BUSINESS: User = { id: 1, business_id: 1, role: 'business', email: 'owner@x.com', full_name: 'Dueño' }
@@ -85,9 +88,17 @@ beforeEach(() => {
   mocks.list.mockReset()
   mocks.categories.mockReset()
   mocks.settings.mockReset()
+  mocks.salesList.mockReset()
   mocks.list.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50, pages: 0 })
   mocks.categories.mockResolvedValue({ items: [] })
   mocks.settings.mockResolvedValue({ logo_url: null, email: '', full_name: '' })
+  mocks.salesList.mockResolvedValue({
+    items: [],
+    total: 0,
+    page: 0,
+    page_size: 50,
+    counts: { total: 0, pending_payment: 0, paid: 0, delivered: 0, cancelled: 0 },
+  })
 })
 
 afterEach(() => cleanup())
@@ -115,7 +126,7 @@ describe('Gating de rutas por rol', () => {
     expect(screen.queryByRole('heading', { name: 'Configuración' })).not.toBeInTheDocument()
   })
 
-  it('business en /ventas ve el ComingSoonPage con el título "Ventas" (sin subtab de canal)', async () => {
+  it('business en /ventas ve la página Ventas con el título "Ventas" (sin subtab de canal)', async () => {
     renderApp(['/ventas'], BUSINESS)
 
     expect(await screen.findByRole('heading', { name: 'Ventas' })).toBeInTheDocument()

@@ -371,7 +371,10 @@ def _message_text(message):
     except (TypeError, ValueError):
         data = {}
     if message.get("kind") == "question":
-        return ((data.get("question") or {}).get("text") or "").strip()
+        # GET /questions/{id} devuelve la pregunta PLANA; se mantiene el
+        # fallback anidado por filas viejas que pudieran tener otra forma.
+        question = data.get("question") or {}
+        return ((question.get("text") or data.get("text") or "")).strip()
     msgs = data.get("messages") or []
     if msgs:
         return (msgs[-1].get("text") or "").strip()
@@ -395,7 +398,8 @@ def _mark_needs_human_if_unset(message_id, reason):
                       {"id": message_id})
     except LookupError:
         return
-    if row.get("reply_status") is None:
+    if not row.get("reply_status"):
+        # NULL o '' (esquemas viejos): la fila nunca fue procesada.
         _needs_human(row, reason)
 
 
@@ -418,7 +422,7 @@ def _process(message_id):
         logger.warning("process_incoming: message %s not found", message_id)
         return {"reply": None, "audit": None, "needs_human_reason": None}
 
-    if message.get("reply_status") is not None:
+    if message.get("reply_status"):
         logger.info("Message %s already processed (%s); skipping",
                     message_id, message["reply_status"])
         return {"reply": None, "audit": None, "needs_human_reason": None}
