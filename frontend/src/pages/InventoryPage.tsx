@@ -17,6 +17,8 @@ import {
   type InventoryFilters,
 } from '../features/inventory/inventoryColumns'
 import { CsvExportButton } from '../components/CsvExportButton'
+import { SelectBox } from '../features/massActions/SelectBox'
+import { MassActionsBar } from '../features/massActions/MassActionsBar'
 
 // Columnas exportables del CSV: las mismas de la vista (producto = nombre).
 const CSV_COLUMNS = [
@@ -41,6 +43,11 @@ export function InventoryPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [drawerProduct, setDrawerProduct] = useState<Product | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+
+  // La selección se limpia al cambiar de página o de canal (Figma v184).
+  useEffect(() => {
+    setSelected(new Set())
+  }, [page, channel])
 
   // Deep link desde Preguntas: /inventory?product={id} abre el drawer de ese producto.
   useEffect(() => {
@@ -105,7 +112,8 @@ export function InventoryPage() {
       .then((res) => {
         if (requestId.current === id) {
           setData(res)
-          setSelected(new Set())
+          // La selección SE CONSERVA entre refrescos (vive en la vista);
+          // se limpia al cambiar de página o de canal.
         }
       })
       .catch((err: Error) => {
@@ -268,7 +276,11 @@ export function InventoryPage() {
               <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr className="bg-white" style={{ borderBottom: '1px solid #F1F5F9' }}>
                   <th className="w-10 px-4 py-3">
-                    <input type="checkbox" checked={allChecked} onChange={toggleAll} />
+                    <SelectBox
+                      checked={allChecked}
+                      indeterminate={selected.size > 0 && !allChecked}
+                      onChange={toggleAll}
+                    />
                   </th>
                   {defs.map((c) => (
                     <th
@@ -345,7 +357,7 @@ export function InventoryPage() {
                       }}
                     >
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggleOne(p.id)} />
+                        <SelectBox checked={selected.has(p.id)} onChange={() => toggleOne(p.id)} />
                       </td>
                       {defs.map((c) => (
                         <td key={c.key} className="px-2 py-3" style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>
@@ -428,6 +440,8 @@ export function InventoryPage() {
           onChanged={onDrawerChanged}
         />
       )}
+
+      <MassActionsBar selectedIds={[...selected]} onClear={() => setSelected(new Set())} />
     </div>
   )
 }

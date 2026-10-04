@@ -6,6 +6,7 @@ import { AppShell } from './layout/AppShell'
 import { LoginPage } from './pages/LoginPage'
 import { InventoryPage } from './pages/InventoryPage'
 import { ChannelListingsPage } from './pages/ChannelListingsPage'
+import { EjecucionesPage } from './pages/EjecucionesPage'
 import { ShipmentsPage } from './pages/ShipmentsPage'
 import { VentasPage } from './pages/VentasPage'
 import { ComingSoonPage } from './pages/ComingSoonPage'
@@ -66,6 +67,7 @@ export default function App() {
         <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/inventory/mercadolibre" element={<ChannelListingsPage platform="ml" />} />
         <Route path="/inventory/tiendanube" element={<ChannelListingsPage platform="tn" />} />
+        <Route path="/inventory/ejecuciones" element={<EjecucionesPage />} />
         <Route path="/ventas" element={<RequireBusiness><VentasPage /></RequireBusiness>} />
         <Route path="/envios" element={<ShipmentsPage />} />
         <Route path="/envios/mercadolibre" element={<Navigate to="/envios" replace />} />

@@ -764,3 +764,41 @@ export type ReportQuery = {
   days?: 7 | 30 | 90
   channel?: SalesChannel | 'all'
 }
+
+// ─── Acciones masivas (POST /api/mass-actions/*) ────────────────────────────
+
+export type MassAction = 'publish' | 'update' | 'pause' | 'delete' | 'link' | 'unlink'
+export type MassChannel = 'ml' | 'tn'
+export type MassRunStatus = 'queued' | 'running' | 'done' | 'done_errors' | 'failed' | 'cancelled'
+
+export interface MassFailure {
+  product: string
+  reason: string | null
+}
+
+export interface MassRun {
+  id: number
+  created_at: string
+  user: string
+  channel: MassChannel
+  action: MassAction
+  total: number
+  ok: number
+  errors: number
+  skipped: number
+  status: MassRunStatus
+  queue_position: number | null
+  failures?: MassFailure[]
+}
+
+export type MassPlatformCounts = { ml: number; tn: number }
+
+export interface MassEligibility {
+  products: number
+  publish: MassPlatformCounts
+  update: MassPlatformCounts
+  pause: MassPlatformCounts
+  delete: MassPlatformCounts
+  link: MassPlatformCounts
+  unlink: MassPlatformCounts
+}

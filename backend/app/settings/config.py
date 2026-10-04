@@ -17,6 +17,19 @@ SCHEMA_MERCADOLIBRE=os.getenv("SCHEMA_MERCADOLIBRE")
 SCHEMA_INVENTORY=os.getenv("SCHEMA_INVENTORY")
 SCHEMA_AI=os.getenv("SCHEMA_AI")
 SCHEMA_TIENDANUBE = os.getenv("SCHEMA_TIENDANUBE")
+SCHEMA_MASS_ACTIONS=os.getenv("SCHEMA_MASS_ACTIONS", "mass_actions")
+
+# ─── Acciones masivas (jobs en lote) ────────────────────────────────────────
+# Secreto compartido con el worker separado (mass-actions-worker/): vacío =
+# endpoints internos SIN auth (dev/tests). En prod setear el mismo valor en
+# ambos servicios (Secret Manager).
+MASS_ACTIONS_INTERNAL_TOKEN = os.getenv("MASS_ACTIONS_INTERNAL_TOKEN", "")
+# Ítems por lote que claima cada llamada de /internal/mass-actions/next.
+MASS_ACTIONS_BATCH_SIZE = int(os.getenv("MASS_ACTIONS_BATCH_SIZE", "25"))
+# TTL del lease: un job `running` sin heartbeat hace más que esto se marca
+# `failed` ("worker perdido") y su cuenta se libera; los ítems `running` sin
+# actualizar hace más que esto vuelven a `pending` para ser re-claimados.
+MASS_ACTIONS_RECLAIM_SECONDS = int(os.getenv("MASS_ACTIONS_RECLAIM_SECONDS", "600"))
 
 # Database connection
 INSTANCE_DB = os.getenv("INSTANCE_DB")  # Cloud SQL instance connection name

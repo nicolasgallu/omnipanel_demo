@@ -836,3 +836,62 @@ CREATE TABLE ai.prompts (
     FOREIGN KEY (business_id) REFERENCES platform_accounts.businesses(id) ON DELETE CASCADE
 );
 ```
+-- ============================================================
+-- SCHEMA: mass_actions (acciones masivas — jobs en lote)
+-- ============================================================
+
+> Feature "Acciones masivas" (backend 04/10, front pendiente vía Figma).
+> Un job = una corrida = (negocio, plataforma, acción, cuenta). FIFO por
+> cuenta: `dispatch` atómico inicia el `queued` más viejo de la cuenta solo
+> si no hay otro `running`. `job_items` = ledger ítem por ítem (progreso,
+> errores legibles y reintento sin duplicar). El worker separado
+> (`mass-actions-worker/`) solo hace pull a `/internal/mass-actions/*`.
+> DDL idempotente: `backend/scripts/mass_actions_schema.sql`.
+> En **Cloud SQL** crear el schema con ese mismo script (idempotente).
+
+```sql
+CREATE TABLE mass_actions.jobs (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    business_id INT NOT NULL,               -- scoping por negocio (invariante)
+    platform VARCHAR(24) NOT NULL,          -- mercadolibre | tiendanube
+    action_type VARCHAR(24) NOT NULL,       -- publish|update|pause|delete|link_catalog|unlink_catalog
+    account_id INT NOT NULL,
+    status VARCHAR(24) NOT NULL DEFAULT 'queued', -- queued|running|completed|completed_with_errors|failed|cancelled
+    total_items INT NOT NULL DEFAULT 0,
+    succeeded INT NOT NULL DEFAULT 0,
+    failed INT NOT NULL DEFAULT 0,
+    skipped INT NOT NULL DEFAULT 0,
+    payload JSON NULL,                      -- criterio de selección / opciones (auditoría)
+    created_by INT NULL,                    -- actor (business/employee)
+    created_by_role VARCHAR(16) NULL,
+    event_id INT NULL,                      -- fila de auditoría en platform_accounts.events
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP NULL,
+    finished_at TIMESTAMP NULL,
+    heartbeat_at TIMESTAMP NULL,            -- lease del worker (reclaim > 600s)
+    error VARCHAR(255) NULL,
+    KEY idx_jobs_business (business_id, created_at),
+    KEY idx_jobs_account_status (account_id, status, id)
+);
+```
+
+```sql
+CREATE TABLE mass_actions.job_items (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    job_id INT NOT NULL,
+    product_id INT NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'pending', -- pending|running|succeeded|failed|skipped
+    attempts INT NOT NULL DEFAULT 0,
+    external_id VARCHAR(50) NULL,           -- id en la plataforma tras la acción
+    reason TEXT NULL,                       -- mensaje legible (JSON crudo va al log)
+    remedy VARCHAR(255) NULL,
+    claim_token VARCHAR(32) NULL,           -- lote que claimó el ítem (idempotencia)
+    created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_job_product (job_id, product_id),
+    KEY idx_items_job_status (job_id, status),
+    KEY idx_items_status_updated (status, updated_at),
+    FOREIGN KEY (job_id) REFERENCES mass_actions.jobs (id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id) REFERENCES inventory.products (id) ON DELETE CASCADE
+);
+```

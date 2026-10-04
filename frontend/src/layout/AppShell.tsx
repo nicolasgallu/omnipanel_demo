@@ -25,6 +25,7 @@ const NAV: NavItem[] = [
     children: [
       { label: 'MercadoLibre', icon: 'ml', path: '/inventory/mercadolibre' },
       { label: 'Tienda Nube', icon: 'tn', path: '/inventory/tiendanube' },
+      { label: 'Ejecuciones', icon: 'ejecuciones', path: '/inventory/ejecuciones' },
     ],
   },
   {

@@ -96,6 +96,57 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
 
 ## Pendientes conocidos
 
+- **IMPLEMENTADO 04/10 — Acciones masivas (backend + DB + FRONT, Figma v184)**:
+  selección de productos en las 3 vistas de inventario → cartel de acciones
+  con contadores en vivo por plataforma ("N ready", estado LOCAL
+  solo) → UN job por cuenta con FIFO por cuenta (dispatch atómico: un solo
+  `running` por cuenta, cuentas distintas en paralelo) → ejecución por lotes
+  idempotentes (claim_token) que ejecutan el MISMO `pipeline_publish` del
+  botón individual (+ `link_catalog`/`unlink_catalog` nuevos en
+  `product_handler.py`: ficha por GTIN / swap con sombra). Schema
+  `mass_actions` (`jobs` + `job_items` ledger; DDL idempotente en
+  `scripts/mass_actions_schema.sql`, ya aplicado al MySQL local;
+  `backend_tables.md` y `check_schema_sync.py` actualizados). Código:
+  `backend/app/jobs/` (eligibility/engine/api/internal) + blueprints en
+  `main.py`. Worker SEPARADO (decisión del usuario), modelo PUSH:
+  `mass-actions-worker/` en la raíz, carpeta autónoma estilo `load-tests/`
+  (Dockerfile + cloudbuild.yaml + README), orquestador delgado: el backend
+  encola UN ticket por lote en Cloud Tasks (cola `mass-actions`,
+  `enqueue_mass_action()` en `tasks.py`) hacia `POST /run` del worker (OIDC,
+  audience = `MASS_ACTIONS_WORKER_URL`); el worker procesa un lote vía
+  `/internal/mass-actions/{next, items/<id>/execute, advance}` con Bearer
+  compartido `MASS_ACTIONS_INTERNAL_TOKEN` (vacío = sin auth dev/tests) y
+  Cloud Run lo escala a CERO al quedar sin tráfico. El backend encadena el
+  ticket siguiente mientras quede trabajo (`engine._kick_ticket`): la cadena
+  termina sola en idle; 500 = Cloud Tasks reintenta (claim atómico =
+  idempotente). Dev local: `DEV_LOOP=1` en el worker (pull). API pública
+  `/api/mass-actions/*` (@require_auth, empleados incluidos): eligibility,
+  create (202 / 400 nothing_to_run), list (queue_position + actor), detail
+  (failed_items paginados), DELETE (queued→cancelada, running→aborta;
+  terminal con resultado→409). Una fila de auditoría en `events` por job.
+  Reclaim oportunista (600s sin heartbeat → failed, ítems running viejos →
+  pending). FRONT (port del Figma v184): barra flotante + menú de dos paneles
+  + modal con checkboxes por plataforma y confirmación extra para borrar en
+  `features/massActions/{shared,SelectBox,MassActionsBar}.tsx`, subpágina
+  `/inventory/ejecuciones` (`pages/EjecucionesPage.tsx`: tabla, RunPill,
+  drawer con contadores/errores/borrar, polling 2s mientras hay activas),
+  nav Inventario → Ejecuciones (ícono nuevo en NavIcon), selección persistente
+  (se limpia al cambiar de página/canal) en InventoryPage y
+  ChannelListingsPage, `massDrop` en index.css, `massActionsApi` + tipos +
+  contrato (`massActionsApi.test.ts`) + mock de dev. API pública del front:
+  `POST /api/mass-actions/eligibility {product_ids}` →
+  `{action: {ml, tn}}`; `POST /api/mass-actions {action, channel, product_ids}`
+  (una corrida por llamada); `GET /api/mass-actions` / `/<id>` (MassRun:
+  statuses `queued|running|done|done_errors|failed|cancelled`, `user`,
+  `queue_position`, `failures[{product,reason}]`); `DELETE /<id>`.
+  Tests: backend 377 passed/5 skipped; front 39 passed + typecheck + build.
+  PENDIENTE DEL USUARIO: crear `mass_actions` en Cloud SQL
+  con el script, deployar el worker (registry+trigger+Cloud Run
+  scale-to-zero, `--no-allow-unauthenticated`, timeout=300), crear la cola
+  `mass-actions` en Cloud Tasks + `roles/run.invoker` al SA, setear el token
+  y `MASS_ACTIONS_WORKER_URL`/`MASS_ACTIONS_QUEUE` en ambos servicios. Spec:
+  `backend/docs/mass_actions_plan.md` (contrato final).
+
 - **IMPLEMENTADO 04/10 — Panel unificado de Envíos (backend + front, contrato
   FINAL del Figma)**: tabla `tiendanube.shipments` (1:1 con la orden, key
   `(account_id, order_id)`; `status` = estado POR FILA del enumerado único

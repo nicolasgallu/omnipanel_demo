@@ -2347,13 +2347,14 @@ function DrawerModal({ product, initialTab = "producto", onClose }: { product: P
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
-type NavIconKey = "inventario" | "ml" | "tn" | "ventas" | "envios" | "competencia" | "prompts" | "preguntas" | "usuarios" | "configuracion" | "notificaciones";
+type NavIconKey = "inventario" | "ml" | "tn" | "ventas" | "envios" | "competencia" | "prompts" | "preguntas" | "usuarios" | "configuracion" | "notificaciones" | "ejecuciones";
 type NavChild = { label: string; icon: NavIconKey; key?: string };
 type NavItem = { label: string; icon: NavIconKey; children?: NavChild[] };
 const NAV: NavItem[] = [
   { label: "Inventario", icon: "inventario", children: [
     { label: "MercadoLibre", icon: "ml" },
     { label: "Tienda Nube", icon: "tn" },
+    { label: "Ejecuciones", icon: "ejecuciones" },
   ] },
   { label: "Ventas", icon: "ventas" },
   { label: "Envíos", icon: "envios" },
@@ -2375,6 +2376,8 @@ function NavIcon({ name, size = 16 }: { name: NavIconKey; size?: number }) {
       return (<svg {...p}><path d="M3 7.5l1.2-4h11.6L17 7.5" /><path d="M3 7.5v9h14v-9" /><path d="M3 7.5a2 2 0 0 0 4 0 2 2 0 0 0 3 0 2 2 0 0 0 3 0 2 2 0 0 0 4 0" /><path d="M8 16.5v-4h4v4" /></svg>);
     case "ventas": // trending-up chart
       return (<svg {...p}><path d="M3 16.5h14" /><path d="M4.5 13l3.5-4 3 2.5L17 5.5" /><path d="M13.5 5.5H17V9" /></svg>);
+    case "ejecuciones": // queue / list with play
+      return (<svg {...p}><path d="M3.5 5h9M3.5 10h7M3.5 15h5" /><path d="M13 12.5l4 2.5-4 2.5v-5z" /></svg>);
     case "envios": // delivery truck
       return (<svg {...p}><path d="M2.5 5.5h9v8h-9z" /><path d="M11.5 8h3l2.5 2.5v3h-5.5" /><circle cx="6" cy="15" r="1.4" /><circle cx="14" cy="15" r="1.4" /></svg>);
     case "competencia": // target
@@ -2864,8 +2867,10 @@ function ColumnManager({ cols, setCols }: { cols: ColKey[]; setCols: (c: ColKey[
 
 // ─── Table ────────────────────────────────────────────────────────────────────
 
-function ProductTable({ search, filters, cols, setCols, onSelect }: { search: string; filters: Filters; cols: ColKey[]; setCols: (c: ColKey[]) => void; onSelect: (p: Product) => void }) {
+function ProductTable({ search, filters, cols, setCols, onSelect, sel }: { search: string; filters: Filters; cols: ColKey[]; setCols: (c: ColKey[]) => void; onSelect: (p: Product) => void; sel: RowSelection }) {
   const filtered = filterProducts(search, filters);
+  const allOn = filtered.length > 0 && filtered.every(p => sel.ids.has(p.id));
+  const someOn = filtered.some(p => sel.ids.has(p.id));
   const defs = cols.map(k => COL_MAP[k]).filter(Boolean);
   const [dragKey, setDragKey] = useState<ColKey | null>(null);
   const [overKey, setOverKey] = useState<ColKey | null>(null);
@@ -2894,7 +2899,7 @@ function ProductTable({ search, filters, cols, setCols, onSelect }: { search: st
       <table className="w-full text-xs border-collapse" style={{ minWidth: "680px" }}>
         <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
           <tr className="bg-white" style={{ borderBottom: "1px solid #F1F5F9" }}>
-            <th className="w-10 pl-4 pr-1 py-3"><input type="checkbox" /></th>
+            <th className="w-10 pl-4 pr-1 py-3"><SelectBox label="Seleccionar todos" checked={allOn} indeterminate={someOn} onChange={() => sel.setMany(filtered.map(p => p.id), !allOn)} /></th>
             {defs.map(c => (
               <th key={c.key} className="px-2 py-3 font-semibold tracking-wider select-none"
                 draggable={!c.locked}
@@ -2933,7 +2938,7 @@ function ProductTable({ search, filters, cols, setCols, onSelect }: { search: st
         <tbody>
           {filtered.map(p => (
             <tr key={p.id} className="group cursor-pointer transition-colors hover:bg-slate-50" style={{ borderBottom: "1px solid #F8FAFC" }} onClick={() => { if (editRow === p.id) return; onSelect(p); }}>
-              <td className="pl-4 pr-1 py-3" onClick={e => e.stopPropagation()}><input type="checkbox" /></td>
+              <td className="pl-4 pr-1 py-3" onClick={e => e.stopPropagation()}><SelectBox label={`Seleccionar ${p.name}`} checked={sel.ids.has(p.id)} onChange={() => sel.toggle(p.id)} /></td>
               {defs.map(c => (
                 <td key={c.key} className="px-2 py-3" style={{ textAlign: "left", whiteSpace: "nowrap" }}>{c.render(p)}</td>
               ))}
@@ -3089,8 +3094,10 @@ const tnListingRows = (search: string, f: TnFilters) => products.filter(p =>
   && (f.status === "all" || p.tn_status === f.status)
   && (f.category === "all" || p.category === f.category));
 
-function ListingTable({ rows, cols, setCols, colMap, onSelect, empty }: { rows: Product[]; cols: string[]; setCols: (c: string[]) => void; colMap: Record<string, ListingCol>; onSelect: (p: Product) => void; empty: string }) {
+function ListingTable({ rows, cols, setCols, colMap, onSelect, empty, sel }: { rows: Product[]; cols: string[]; setCols: (c: string[]) => void; colMap: Record<string, ListingCol>; onSelect: (p: Product) => void; empty: string; sel: RowSelection }) {
   const columns = cols.map(k => colMap[k]).filter(Boolean);
+  const allOn = rows.length > 0 && rows.every(p => sel.ids.has(p.id));
+  const someOn = rows.some(p => sel.ids.has(p.id));
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
   const [editRow, setEditRow] = useState<number | null>(null);
@@ -3118,8 +3125,9 @@ function ListingTable({ rows, cols, setCols, colMap, onSelect, empty }: { rows: 
       <table className="w-full text-xs border-collapse" style={{ minWidth: "680px" }}>
         <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
           <tr className="bg-white" style={{ borderBottom: "1px solid #F1F5F9" }}>
+            <th className="w-10 pl-4 pr-1 py-3"><SelectBox label="Seleccionar todas" checked={allOn} indeterminate={someOn} onChange={() => sel.setMany(rows.map(p => p.id), !allOn)} /></th>
             {columns.map(c => (
-              <th key={c.key} className="px-2 py-3 font-semibold tracking-wider first:pl-4 select-none"
+              <th key={c.key} className="px-2 py-3 font-semibold tracking-wider select-none"
                 draggable={!c.locked}
                 onDragStart={() => setDragKey(c.key)}
                 onDragEnd={() => { setDragKey(null); setOverKey(null); }}
@@ -3155,8 +3163,9 @@ function ListingTable({ rows, cols, setCols, colMap, onSelect, empty }: { rows: 
         <tbody>
           {rows.map(p => (
             <tr key={p.id} className="group cursor-pointer transition-colors hover:bg-slate-50" style={{ borderBottom: "1px solid #F8FAFC" }} onClick={() => { if (editRow === p.id) return; onSelect(p); }}>
+              <td className="pl-4 pr-1 py-3" onClick={e => e.stopPropagation()}><SelectBox label={`Seleccionar ${p.name}`} checked={sel.ids.has(p.id)} onChange={() => sel.toggle(p.id)} /></td>
               {columns.map(c => (
-                <td key={c.key} className="px-2 py-3 first:pl-4" style={{ textAlign: "left", whiteSpace: "nowrap" }}>{c.render(p)}</td>
+                <td key={c.key} className="px-2 py-3" style={{ textAlign: "left", whiteSpace: "nowrap" }}>{c.render(p)}</td>
               ))}
               <td className="pl-2 pr-4 py-3" style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                 <RowEditAction editing={editRow === p.id} onStart={() => startRow(p.id)} onSave={saveRow} onCancel={cancelRow} />
@@ -3164,7 +3173,7 @@ function ListingTable({ rows, cols, setCols, colMap, onSelect, empty }: { rows: 
             </tr>
           ))}
           {rows.length === 0 && (
-            <tr><td colSpan={columns.length + 1} className="px-4 py-16 text-center" style={{ color: "#94A3B8" }}>{empty}</td></tr>
+            <tr><td colSpan={columns.length + 2} className="px-4 py-16 text-center" style={{ color: "#94A3B8" }}>{empty}</td></tr>
           )}
         </tbody>
       </table>
@@ -4943,6 +4952,13 @@ function Dashboard() {
   const [tnCols, setTnColsState] = useState<string[]>(tnColStore.load);
   const setTnCols = (c: string[]) => { setTnColsState(c); tnColStore.save(c); };
 
+  const [selIds, setSelIds] = useState<Set<number>>(new Set());
+  useEffect(() => { setSelIds(new Set()); }, [active]);
+  const sel: RowSelection = {
+    ids: selIds,
+    toggle: id => setSelIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }),
+    setMany: (ids, on) => setSelIds(s => { const n = new Set(s); ids.forEach(id => on ? n.add(id) : n.delete(id)); return n; }),
+  };
   const isML = active === "MercadoLibre";
   const isTN = active === "Tienda Nube";
   const mlRows = mlListingRows(search, mlFilters);
@@ -4968,6 +4984,8 @@ function Dashboard() {
         <Ventas />
       ) : active === "Envíos" ? (
         <Shipments />
+      ) : active === "Ejecuciones" ? (
+        <Ejecuciones />
       ) : active === "Competencia" ? (
         <div className="flex flex-col flex-1 min-w-0"><ComingSoon title="Competencia" icon="competencia" /></div>
       ) : active === "Prompts AI" ? (
@@ -5027,15 +5045,17 @@ function Dashboard() {
             <DomainSummary domain={isML ? "ml" : "tn"} variant="strip" />
           )}
 
+          <MassActionBar ids={selIds} onClear={() => setSelIds(new Set())} />
+
           <StatusVariantContext.Provider value="chip">
             {isML ? (
-              <ListingTable rows={mlRows} cols={mlCols} setCols={setMlCols} colMap={ML_COL_MAP} onSelect={p => openProduct(p, "ml")}
+              <ListingTable rows={mlRows} cols={mlCols} setCols={setMlCols} colMap={ML_COL_MAP} onSelect={p => openProduct(p, "ml")} sel={sel}
                 empty="No hay publicaciones de MercadoLibre que coincidan con los filtros." />
             ) : isTN ? (
-              <ListingTable rows={tnRows} cols={tnCols} setCols={setTnCols} colMap={TN_COL_MAP} onSelect={p => openProduct(p, "tn")}
+              <ListingTable rows={tnRows} cols={tnCols} setCols={setTnCols} colMap={TN_COL_MAP} onSelect={p => openProduct(p, "tn")} sel={sel}
                 empty="No hay publicaciones de Tienda Nube que coincidan con los filtros." />
             ) : (
-              <ProductTable search={search} filters={filters} cols={cols} setCols={setCols} onSelect={p => openProduct(p, "producto")} />
+              <ProductTable search={search} filters={filters} cols={cols} setCols={setCols} onSelect={p => openProduct(p, "producto")} sel={sel} />
             )}
           </StatusVariantContext.Provider>
         </div>
@@ -8533,3 +8553,475 @@ export default function App() {
   if (route.startsWith("#/admin")) return <AdminApp />;
   return <BusinessApp />;
 }
+
+// ─── Acciones masivas + Ejecuciones ─────────────────────────────────────────
+type MassActionKey = "publish" | "update" | "pause" | "delete" | "link" | "unlink";
+type MassCounts = { ml: number; tn: number };
+const MASS_ACTIONS: { key: MassActionKey; label: string; verb: string; channels: SalesChannelKey[]; danger?: boolean }[] = [
+  { key: "publish", label: "Publicar", verb: "publicar", channels: ["ml", "tn"] },
+  { key: "update", label: "Actualizar", verb: "actualizar", channels: ["ml", "tn"] },
+  { key: "pause", label: "Pausar", verb: "pausar", channels: ["ml"] },
+  { key: "delete", label: "Borrar", verb: "borrar", channels: ["ml", "tn"], danger: true },
+  { key: "link", label: "Vincular a catálogo", verb: "vincular a catálogo", channels: ["ml"] },
+  { key: "unlink", label: "Desvincular de catálogo", verb: "desvincular de catálogo", channels: ["ml"] },
+];
+const CH_NAME: Record<SalesChannelKey, string> = { ml: "MercadoLibre", tn: "Tienda Nube" };
+
+function eligible(p: Product, a: MassActionKey, ch: SalesChannelKey): boolean {
+  const s = ch === "ml" ? p.ml_status : p.tn_status;
+  switch (a) {
+    case "publish": return s === "unpublished" || s === "prepublished" || s === "failed";
+    case "update": return s === "published" || s === "paused";
+    case "pause": return ch === "ml" && s === "published";
+    case "delete": return s === "published" || s === "paused" || s === "prepublished";
+    case "link": return ch === "ml" && (s === "published" || s === "paused") && mlCatalog(p).state !== "catalog";
+    case "unlink": return ch === "ml" && (s === "published" || s === "paused") && mlCatalog(p).state === "catalog";
+  }
+}
+function massCounts(ids: Set<number>, a: MassActionKey): MassCounts {
+  const sel = products.filter(p => ids.has(p.id));
+  const def = MASS_ACTIONS.find(x => x.key === a)!;
+  return {
+    ml: def.channels.includes("ml") ? sel.filter(p => eligible(p, a, "ml")).length : 0,
+    tn: def.channels.includes("tn") ? sel.filter(p => eligible(p, a, "tn")).length : 0,
+  };
+}
+
+function SelectBox({ checked, indeterminate, onChange, label }: { checked: boolean; indeterminate?: boolean; onChange: () => void; label: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = !!indeterminate && !checked; }, [indeterminate, checked]);
+  return <input ref={ref} type="checkbox" aria-label={label} checked={checked} onChange={onChange} onClick={e => e.stopPropagation()} className="cursor-pointer" style={{ accentColor: "#4F46E5" }} />;
+}
+
+function Spinner({ size = 14, color = "#4F46E5" }: { size?: number; color?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" className="animate-spin" style={{ flexShrink: 0 }}>
+      <circle cx="8" cy="8" r="6" fill="none" stroke={color} strokeOpacity="0.2" strokeWidth="2" />
+      <path d="M14 8a6 6 0 0 0-6-6" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CountChip({ ch, n }: { ch: SalesChannelKey; n: number }) {
+  return (
+    <span className="inline-flex items-center gap-1.5" style={{ opacity: n === 0 ? 0.4 : 1 }}>
+      <ChannelBadge channel={ch} />
+      <span className="text-[11px] font-semibold tabular-nums" style={{ color: n === 0 ? "#94A3B8" : "#0A1628" }}>{fmtN(n)}</span>
+    </span>
+  );
+}
+const fmtN = (n: number) => n.toLocaleString("es-AR");
+
+function MassActionBar({ ids, onClear }: { ids: Set<number>; onClear: () => void }) {
+  const [action, setAction] = useState<MassActionKey | null>(null);
+  const [toast, setToast] = useState(false);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(false), 3200); return () => clearTimeout(t); }, [toast]);
+  if (ids.size === 0 && !toast) return null;
+  const pick = (a: MassActionKey) => setAction(a);
+  return (
+    <>
+      {ids.size > 0 && <MassBarFloating ids={ids} onClear={onClear} onPick={pick} />}
+      {action && <MassActionModal ids={ids} action={action} onClose={() => setAction(null)} onDone={() => { setAction(null); setToast(true); onClear(); }} />}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-[60] flex items-center gap-3 px-4 py-3 rounded-xl bg-white" style={{ border: "1px solid #E2E8F0", boxShadow: "0 12px 32px -12px rgba(15,23,42,0.25)" }}>
+          <span className="w-6 h-6 rounded-full flex items-center justify-center" style={{ background: "#DCFCE7", color: "#16A34A" }}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.3 2.3 4.7-4.9" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+          </span>
+          <div>
+            <p className="text-xs font-semibold" style={{ color: "#0A1628" }}>Acción encolada</p>
+            <p className="text-[11px]" style={{ color: "#64748B" }}>Seguí el progreso en Inventario › Ejecuciones.</p>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+type MassBarProps = { ids: Set<number>; onClear: () => void; onPick: (a: MassActionKey) => void };
+const Chevron = ({ open }: { open: boolean }) => (
+  <svg width="10" height="10" viewBox="0 0 12 12" fill="none" style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}><path d="M3 4.5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+);
+// Fila de plataforma: escala hacia abajo, no hacia la derecha.
+function PlatformRow({ ch, n }: { ch: SalesChannelKey; n: number }) {
+  return (
+    <div className="flex items-center gap-2 py-1" style={{ opacity: n === 0 ? 0.45 : 1 }}>
+      <ChannelBadge channel={ch} />
+      <span className="text-[11px] flex-1" style={{ color: "#64748B" }}>{CH_NAME[ch]}</span>
+      <span className="text-[11px] font-semibold tabular-nums" style={{ color: n === 0 ? "#94A3B8" : "#0A1628" }}>{fmtN(n)}</span>
+    </div>
+  );
+}
+
+// Barra flotante arriba al centro; menú en dos paneles (acción → desglose por plataforma) que despliega hacia abajo.
+function MassBarFloating({ ids, onClear, onPick }: MassBarProps) {
+  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState<MassActionKey>("publish");
+  const cur = MASS_ACTIONS.find(a => a.key === hover)!;
+  const curC = massCounts(ids, hover);
+  const curTotal = cur.channels.reduce((s, ch) => s + curC[ch], 0);
+  return (
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-40" style={{ animation: "massDrop 0.2s ease both" }}>
+      {open && (
+        <>
+          <div className="fixed inset-0 -z-10" onClick={() => setOpen(false)} />
+          <div className="absolute top-full mt-2 right-0 w-[480px] rounded-2xl bg-white flex overflow-hidden" style={{ border: "1px solid #E2E8F0", boxShadow: "0 20px 48px -16px rgba(15,23,42,0.3)" }}>
+            <div className="w-[210px] p-1.5" style={{ borderRight: "1px solid #F1F5F9", background: "#FAFBFC" }}>
+              {MASS_ACTIONS.map(a => {
+                const c = massCounts(ids, a.key);
+                const total = a.channels.reduce((s, ch) => s + c[ch], 0);
+                const on = hover === a.key;
+                return (
+                  <button key={a.key} onMouseEnter={() => setHover(a.key)} onFocus={() => setHover(a.key)}
+                    onClick={() => { if (total) { setOpen(false); onPick(a.key); } }}
+                    className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg text-left"
+                    style={{ background: on ? "#FFF" : "transparent", boxShadow: on ? "0 1px 3px rgba(15,23,42,0.08)" : "none", cursor: total ? "pointer" : "not-allowed" }}>
+                    <span className="text-xs font-semibold" style={{ color: total === 0 ? "#CBD5E1" : a.danger ? "#DC2626" : "#0A1628" }}>{a.label}</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold tabular-nums" style={{ color: total ? "#64748B" : "#CBD5E1" }}>{fmtN(total)}</span>
+                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none" style={{ color: on ? "#4F46E5" : "#CBD5E1" }}><path d="M3 1.5L5.5 4 3 6.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex-1 p-4 flex flex-col">
+              <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#94A3B8" }}>Listas para ejecutar</p>
+              <p className="text-sm font-bold mt-0.5" style={{ color: cur.danger ? "#DC2626" : "#0A1628" }}>{cur.label}</p>
+              <div className="mt-3 flex-1 space-y-0.5">
+                {cur.channels.map(ch => <PlatformRow key={ch} ch={ch} n={curC[ch]} />)}
+              </div>
+              <button disabled={curTotal === 0} onClick={() => { setOpen(false); onPick(hover); }}
+                className="mt-3 w-full py-2 rounded-lg text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: cur.danger ? "#FEF2F2" : "#EEF2FF", color: cur.danger ? "#DC2626" : "#4F46E5" }}>
+                {curTotal === 0 ? "Nada para ejecutar" : `${cur.label} · ${fmtN(curTotal)}`}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+      <div className="flex items-center gap-3 pl-4 pr-2 py-2 rounded-2xl bg-white" style={{ border: "1px solid #E2E8F0", boxShadow: "0 16px 40px -12px rgba(15,23,42,0.35)" }}>
+        <span className="text-xs font-semibold whitespace-nowrap" style={{ color: "#0A1628" }}>
+          <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 mr-1.5 rounded-md text-[11px] font-bold tabular-nums" style={{ background: "#EEF2FF", color: "#4F46E5" }}>{fmtN(ids.size)}</span>
+          {ids.size === 1 ? "seleccionado" : "seleccionados"}
+        </span>
+        <button onClick={onClear} className="text-xs font-medium hover:underline whitespace-nowrap" style={{ color: "#64748B" }}>Deseleccionar</button>
+        <button onClick={() => setOpen(o => !o)} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap" style={{ background: "#4F46E5", color: "#FFF" }}>
+          Acciones masivas <Chevron open={open} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MassActionModal({ ids, action, onClose, onDone }: { ids: Set<number>; action: MassActionKey; onClose: () => void; onDone: () => void }) {
+  const def = MASS_ACTIONS.find(a => a.key === action)!;
+  const [counts, setCounts] = useState<MassCounts | null>(null);
+  const [on, setOn] = useState<Record<SalesChannelKey, boolean>>({ ml: true, tn: true });
+  const [ack, setAck] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { let live = true; wait(650).then(() => { if (live) setCounts(massCounts(ids, action)); }); return () => { live = false; }; }, [ids, action]);
+  const avail = def.channels.filter(ch => (counts?.[ch] ?? 0) > 0);
+  const chosen = avail.filter(ch => on[ch]);
+  const total = chosen.reduce((s, ch) => s + counts![ch], 0);
+  const isDel = action === "delete";
+  const canGo = !!counts && total > 0 && (!isDel || ack) && !busy;
+  const summary = chosen.length === 0 ? "Elegí al menos una plataforma." :
+    `Vas a ${def.verb} ${fmtN(counts![chosen[0]])} publicaciones en ${CH_NAME[chosen[0]]}` + (chosen[1] ? ` y ${fmtN(counts![chosen[1]])} en ${CH_NAME[chosen[1]]}.` : ".");
+  const confirm = async () => {
+    setBusy(true); await wait(500);
+    chosen.forEach(ch => runsApi.enqueue(action, ch, counts![ch]));
+    onDone();
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/40 backdrop-blur-[2px]" onClick={onClose}>
+      <div className="w-[440px] rounded-2xl bg-white overflow-hidden" style={{ boxShadow: "0 24px 60px -20px rgba(15,23,42,0.45)" }} onClick={e => e.stopPropagation()}>
+        <div className="px-6 pt-5 pb-4">
+          <h2 className="text-base font-bold" style={{ color: "#0A1628" }}>{def.label}</h2>
+          {!counts ? (
+            <div className="flex items-center gap-2.5 py-8 justify-center text-xs" style={{ color: "#64748B" }}><Spinner /> Calculando publicaciones elegibles…</div>
+          ) : avail.length === 0 ? (
+            <div className="mt-4 rounded-xl px-4 py-6 text-center text-xs" style={{ background: "#F8FAFC", color: "#64748B", border: "1px dashed #E2E8F0" }}>
+              Ninguna de las publicaciones seleccionadas puede ejecutar esta acción.
+            </div>
+          ) : (
+            <>
+              <p className="mt-1.5 text-sm" style={{ color: "#475569" }}>{summary}</p>
+              <div className="mt-4 space-y-2">
+                {def.channels.map(ch => {
+                  const n = counts[ch]; const dis = n === 0;
+                  return (
+                    <label key={ch} className="flex items-center gap-3 px-3 py-2.5 rounded-xl" style={{ border: `1px solid ${on[ch] && !dis ? "#C7D2FE" : "#E2E8F0"}`, background: on[ch] && !dis ? "#F5F7FF" : "#FFF", opacity: dis ? 0.5 : 1, cursor: dis ? "not-allowed" : "pointer" }}>
+                      <input type="checkbox" disabled={dis} checked={on[ch] && !dis} onChange={() => setOn(o => ({ ...o, [ch]: !o[ch] }))} style={{ accentColor: "#4F46E5" }} />
+                      <ChannelBadge channel={ch} />
+                      <span className="text-xs font-semibold flex-1" style={{ color: "#0A1628" }}>{CH_NAME[ch]}</span>
+                      <span className="text-xs font-semibold tabular-nums" style={{ color: "#64748B" }}>{fmtN(n)} publicaciones</span>
+                    </label>
+                  );
+                })}
+              </div>
+              {isDel && (
+                <div className="mt-4 rounded-xl px-3.5 py-3" style={{ background: "#FEF2F2", border: "1px solid #FECACA" }}>
+                  <p className="text-xs font-semibold flex items-center gap-1.5" style={{ color: "#B91C1C" }}>
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M8 2l6.5 11.5h-13L8 2z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /><path d="M8 6.5v3M8 11.6v.1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+                    Esta acción no se puede deshacer
+                  </p>
+                  <label className="mt-2 flex items-start gap-2 text-xs cursor-pointer" style={{ color: "#7F1D1D" }}>
+                    <input type="checkbox" checked={ack} onChange={() => setAck(a => !a)} className="mt-0.5" style={{ accentColor: "#DC2626" }} />
+                    Entiendo que esto borra definitivamente {fmtN(total)} publicaciones
+                  </label>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-6 py-3.5" style={{ borderTop: "1px solid #F1F5F9", background: "#FAFBFC" }}>
+          <button onClick={onClose} className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-white hover:bg-slate-50" style={{ border: "1px solid #E2E8F0", color: "#475569" }}>Cancelar</button>
+          <button disabled={!canGo} onClick={confirm} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{ background: isDel ? "#DC2626" : "#4F46E5", color: "#FFF" }}>
+            {busy && <Spinner size={12} color="#FFF" />} Encolar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Ejecuciones: store simulado (reemplazar por GET/POST/DELETE /mass-actions) ─
+type RunStatus = "queued" | "running" | "done" | "done_errors" | "failed" | "cancelled";
+type RunFailure = { product: string; reason: string };
+type MassRun = {
+  id: string; created_at: number; user: string; channel: SalesChannelKey; action: MassActionKey;
+  total: number; ok: number; errors: number; skipped: number; status: RunStatus;
+  queue_position: number | null; failures: RunFailure[];
+};
+const RUN_STATUS: Record<RunStatus, { label: string; color: string; bg: string; border: string }> = {
+  queued:      { label: "En cola", color: "#475569", bg: "#F1F5F9", border: "#E2E8F0" },
+  running:     { label: "Ejecutando", color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
+  done:        { label: "Completada", color: "#16A34A", bg: "#F0FDF4", border: "#BBF7D0" },
+  done_errors: { label: "Completada con errores", color: "#B45309", bg: "#FFFBEB", border: "#FDE68A" },
+  failed:      { label: "Fallida", color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" },
+  cancelled:   { label: "Cancelada", color: "#64748B", bg: "#F8FAFC", border: "#E2E8F0" },
+};
+const RUN_FAIL_REASONS: Record<SalesChannelKey, string[]> = {
+  ml: ["MercadoLibre respondió 400 · el título excede 60 caracteres", "MercadoLibre respondió 400 · falta el atributo obligatorio GTIN", "MercadoLibre respondió 403 · la categoría requiere vender en catálogo", "MercadoLibre respondió 429 · límite de solicitudes, se reintentó 3 veces"],
+  tn: ["Tienda Nube respondió 422 · el precio debe ser mayor a 0", "Tienda Nube respondió 404 · el producto ya no existe en la tienda", "Tienda Nube respondió 422 · la imagen supera los 10 MB"],
+};
+const mkFailures = (ch: SalesChannelKey, n: number): RunFailure[] =>
+  Array.from({ length: n }, (_, i) => ({ product: products[(i * 4 + 1) % products.length].name, reason: RUN_FAIL_REASONS[ch][i % RUN_FAIL_REASONS[ch].length] }));
+const MIN = 60_000;
+let runSeq = 100;
+let runs: MassRun[] = (() => {
+  const now = Date.now();
+  const r = (id: number, ago: number, user: string, channel: SalesChannelKey, action: MassActionKey, total: number, ok: number, errors: number, skipped: number, status: RunStatus): MassRun =>
+    ({ id: `run_${id}`, created_at: now - ago * MIN, user, channel, action, total, ok, errors, skipped, status, queue_position: null, failures: mkFailures(channel, Math.min(errors, 6)) });
+  return [
+    r(9, 1, "Lucía Fernández", "ml", "pause", 180, 0, 0, 0, "queued"),
+    r(8, 2, "Martín Gómez", "ml", "update", 420, 0, 0, 0, "queued"),
+    r(7, 6, "Lucía Fernández", "ml", "publish", 1234, 312, 4, 2, "running"),
+    r(6, 8, "Martín Gómez", "tn", "update", 640, 210, 0, 0, "running"),
+    r(5, 52, "Sofía Ruiz", "tn", "publish", 200, 200, 0, 0, "done"),
+    r(4, 190, "Martín Gómez", "ml", "link", 30, 24, 5, 1, "done_errors"),
+    r(3, 60 * 26, "Lucía Fernández", "ml", "delete", 30, 0, 30, 0, "failed"),
+    r(2, 60 * 49, "Sofía Ruiz", "tn", "delete", 20, 6, 0, 14, "cancelled"),
+  ];
+})();
+let lastTick = Date.now();
+function tickRuns() {
+  const now = Date.now(); const dt = (now - lastTick) / 1000; lastTick = now;
+  (["ml", "tn"] as SalesChannelKey[]).forEach(ch => {
+    let cur = runs.find(r => r.channel === ch && r.status === "running");
+    if (!cur) {
+      const next = runs.filter(r => r.channel === ch && r.status === "queued").sort((a, b) => a.created_at - b.created_at)[0];
+      if (next) { next.status = "running"; cur = next; }
+    }
+    if (cur) {
+      const step = Math.max(1, Math.round(cur.total * 0.035 * dt));
+      const pend = cur.total - cur.ok - cur.errors - cur.skipped;
+      const n = Math.min(step, pend);
+      const errs = cur.action === "delete" || cur.action === "publish" ? Math.floor(n / 25) : 0;
+      cur.errors += errs; cur.ok += n - errs;
+      if (cur.failures.length < 6 && errs > 0) cur.failures = mkFailures(ch, Math.min(cur.errors, 6));
+      if (cur.ok + cur.errors + cur.skipped >= cur.total) cur.status = cur.errors ? "done_errors" : "done";
+    }
+    runs.filter(r => r.channel === ch && r.status === "queued").sort((a, b) => a.created_at - b.created_at).forEach((r, i) => { r.queue_position = i + 1; });
+  });
+  runs.forEach(r => { if (r.status !== "queued") r.queue_position = null; });
+}
+const runsApi = {
+  async list(): Promise<MassRun[]> { await wait(250); tickRuns(); return runs.map(r => ({ ...r })).sort((a, b) => b.created_at - a.created_at); },
+  enqueue(action: MassActionKey, channel: SalesChannelKey, total: number) {
+    runs.push({ id: `run_${++runSeq}`, created_at: Date.now(), user: "Vos", channel, action, total, ok: 0, errors: 0, skipped: 0, status: "queued", queue_position: null, failures: [] });
+    tickRuns();
+  },
+  async remove(id: string) {
+    await wait(500);
+    const r = runs.find(x => x.id === id); if (!r) return;
+    if (r.status === "queued") runs = runs.filter(x => x.id !== id);
+    else if (r.status === "running") { r.status = "cancelled"; r.skipped = r.total - r.ok - r.errors; }
+  },
+};
+const isActive = (r: MassRun) => r.status === "queued" || r.status === "running";
+const runDate = (t: number) => new Date(t).toLocaleString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+
+function RunPill({ run }: { run: MassRun }) {
+  const m = RUN_STATUS[run.status];
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ color: m.color, background: m.bg, border: `1px solid ${m.border}` }}>
+      {run.status === "running" && <Spinner size={10} color={m.color} />}
+      {run.status === "done" && <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2.5 6.2l2.3 2.3 4.7-4.9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>}
+      {run.status === "queued" && <span className="w-1.5 h-1.5 rounded-full" style={{ background: m.color }} />}
+      {m.label}{run.status === "queued" && run.queue_position ? ` · posición ${run.queue_position}` : ""}
+    </span>
+  );
+}
+function RunProgress({ run, big }: { run: MassRun; big?: boolean }) {
+  const doneN = run.ok + run.errors + run.skipped;
+  const pct = run.total ? (doneN / run.total) * 100 : 0;
+  const okPct = run.total ? (run.ok / run.total) * 100 : 0;
+  const errPct = run.total ? (run.errors / run.total) * 100 : 0;
+  return (
+    <div className={big ? "w-full" : "w-[120px]"}>
+      {!big && <span className="text-[11px] font-semibold tabular-nums" style={{ color: "#0A1628" }}>{fmtN(doneN)}<span style={{ color: "#94A3B8" }}>/{fmtN(run.total)}</span></span>}
+      <div className={`${big ? "h-2" : "h-1"} mt-1 rounded-full overflow-hidden flex`} style={{ background: "#F1F5F9" }}>
+        <div style={{ width: `${okPct}%`, background: run.status === "cancelled" ? "#94A3B8" : "#4F46E5", transition: "width .6s" }} />
+        <div style={{ width: `${errPct}%`, background: "#F59E0B", transition: "width .6s" }} />
+        <div style={{ width: `${Math.max(0, pct - okPct - errPct)}%`, background: "#CBD5E1" }} />
+      </div>
+    </div>
+  );
+}
+
+function Ejecuciones() {
+  const [list, setList] = useState<MassRun[] | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const load = () => runsApi.list().then(setList);
+  useEffect(() => { load(); }, []);
+  const anyActive = !!list?.some(isActive);
+  useEffect(() => { if (!anyActive) return; const t = setInterval(load, 2000); return () => clearInterval(t); }, [anyActive]);
+  const open = list?.find(r => r.id === openId) ?? null;
+  const th = "px-3 py-3 text-left font-semibold whitespace-nowrap first:pl-5";
+  return (
+    <div className="flex flex-col flex-1 min-w-0">
+      <div className="flex-1 overflow-hidden flex flex-col p-5 min-h-0 gap-3">
+        <div className="flex items-center justify-between flex-shrink-0">
+          <div className="flex items-baseline gap-2.5">
+            <h1 className="text-base font-bold" style={{ color: "#0A1628" }}>Ejecuciones</h1>
+            {list && <span className="text-xs font-medium" style={{ color: "#94A3B8" }}>{list.length} acciones masivas</span>}
+          </div>
+          {anyActive && <span className="inline-flex items-center gap-1.5 text-[11px] font-medium" style={{ color: "#64748B" }}><span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: "#2563EB" }} />Actualizando en vivo</span>}
+        </div>
+        <div className="flex-1 overflow-auto rounded-2xl bg-white" style={{ border: "1px solid #E2E8F0" }}>
+          {!list ? (
+            <div className="flex items-center justify-center gap-2 py-24 text-xs" style={{ color: "#64748B" }}><Spinner /> Cargando ejecuciones…</div>
+          ) : list.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-24 text-center">
+              <span className="w-12 h-12 rounded-2xl flex items-center justify-center mb-3" style={{ background: "#EEF2FF", color: "#4F46E5" }}><NavIcon name="ejecuciones" size={20} /></span>
+              <p className="text-sm font-semibold" style={{ color: "#0A1628" }}>No hay acciones masivas todavía</p>
+              <p className="text-xs mt-1" style={{ color: "#94A3B8" }}>Seleccioná productos o publicaciones y usá “Acciones masivas”.</p>
+            </div>
+          ) : (
+            <table className="w-full text-xs border-collapse">
+              <thead style={{ position: "sticky", top: 0, zIndex: 1 }}>
+                <tr className="bg-white" style={{ borderBottom: "1px solid #F1F5F9", color: "#94A3B8", fontSize: "10px", letterSpacing: "0.07em" }}>
+                  <th className={th}>FECHA</th><th className={th}>USUARIO</th><th className={th}>PLATAFORMA</th><th className={th}>ACCIÓN</th><th className={th}>ÍTEMS</th><th className={th}>ESTADO</th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.map(r => (
+                  <tr key={r.id} onClick={() => setOpenId(r.id)} className="cursor-pointer hover:bg-slate-50 transition-colors" style={{ borderBottom: "1px solid #F8FAFC" }}>
+                    <td className="px-3 pl-5 py-3 whitespace-nowrap tabular-nums" style={{ color: "#475569" }}>{runDate(r.created_at)}</td>
+                    <td className="px-3 py-3 whitespace-nowrap font-medium" style={{ color: "#0A1628" }}>{r.user}</td>
+                    <td className="px-3 py-3"><ChannelBadge channel={r.channel} /></td>
+                    <td className="px-3 py-3 whitespace-nowrap font-semibold" style={{ color: "#0A1628" }}>{MASS_ACTIONS.find(a => a.key === r.action)!.label}</td>
+                    <td className="px-3 py-3"><RunProgress run={r} /></td>
+                    <td className="px-3 py-3"><RunPill run={r} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+      {open && <RunDrawer run={open} onClose={() => setOpenId(null)} onRemoved={() => { setOpenId(null); load(); }} />}
+    </div>
+  );
+}
+
+function RunDrawer({ run, onClose, onRemoved }: { run: MassRun; onClose: () => void; onRemoved: () => void }) {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const pending = run.total - run.ok - run.errors - run.skipped;
+  const counters: [string, number, string][] = [["Pendientes", pending, "#64748B"], ["Correctos", run.ok, "#16A34A"], ["Con errores", run.errors, "#B45309"], ["Salteados", run.skipped, "#94A3B8"]];
+  const canRemove = isActive(run);
+  const remove = async () => { setBusy(true); await runsApi.remove(run.id); onRemoved(); };
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="flex-1 bg-black/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="w-[520px] h-full bg-white flex flex-col" style={{ boxShadow: "-12px 0 40px -12px rgba(15,23,42,0.3)" }}>
+        <div className="flex items-center justify-between px-6 py-2.5 flex-shrink-0" style={{ borderBottom: "1px solid #F1F5F9" }}>
+          <span className="text-[11px]" style={{ color: "#94A3B8" }}>{isActive(run) ? "Actualizando cada 2 s" : `Ejecución ${run.id}`}</span>
+          <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-slate-100" style={{ color: "#64748B" }} aria-label="Cerrar">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-auto">
+          <div className="px-6 pt-5 pb-5" style={{ borderBottom: "1px solid #F1F5F9" }}>
+            <div className="flex items-center gap-2"><ChannelBadge channel={run.channel} /><RunPill run={run} /></div>
+            <h2 className="mt-2.5 text-lg font-bold" style={{ color: "#0A1628" }}>{MASS_ACTIONS.find(a => a.key === run.action)!.label}</h2>
+            <p className="text-xs mt-0.5" style={{ color: "#64748B" }}>Encolada por <b style={{ color: "#0A1628" }}>{run.user}</b> · {runDate(run.created_at)}</p>
+            <div className="mt-5 flex items-baseline justify-between">
+              <span className="text-2xl font-bold tabular-nums" style={{ color: "#0A1628" }}>{fmtN(run.ok + run.errors + run.skipped)}<span className="text-sm font-semibold" style={{ color: "#94A3B8" }}> / {fmtN(run.total)}</span></span>
+              <span className="text-xs font-semibold tabular-nums" style={{ color: "#64748B" }}>{run.total ? Math.round(((run.total - pending) / run.total) * 100) : 0}%</span>
+            </div>
+            <RunProgress run={run} big />
+            <div className="mt-4 grid grid-cols-4 gap-2">
+              {counters.map(([l, n, c]) => (
+                <div key={l} className="rounded-xl px-3 py-2.5" style={{ background: "#FAFBFC", border: "1px solid #F1F5F9" }}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#94A3B8" }}>{l}</p>
+                  <p className="text-base font-bold tabular-nums mt-0.5" style={{ color: c }}>{fmtN(n)}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="px-6 py-5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider mb-2.5" style={{ color: "#94A3B8" }}>Ítems con errores {run.errors > 0 && `· ${fmtN(run.errors)}`}</p>
+            {run.failures.length === 0 ? (
+              <p className="text-xs py-6 text-center rounded-xl" style={{ color: "#94A3B8", background: "#FAFBFC" }}>Sin errores {isActive(run) ? "por ahora" : ""}.</p>
+            ) : (
+              <ul className="rounded-xl overflow-hidden" style={{ border: "1px solid #F1F5F9" }}>
+                {run.failures.map((f, i) => (
+                  <li key={i} className="px-3.5 py-2.5 flex gap-2.5" style={{ borderTop: i ? "1px solid #F1F5F9" : "none" }}>
+                    <span className="mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: "#F59E0B" }} />
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold truncate" style={{ color: "#0A1628" }}>{f.product}</p>
+                      <p className="text-[11px] mt-0.5" style={{ color: "#64748B" }}>{f.reason}</p>
+                    </div>
+                  </li>
+                ))}
+                {run.errors > run.failures.length && <li className="px-3.5 py-2 text-[11px]" style={{ borderTop: "1px solid #F1F5F9", color: "#94A3B8" }}>y {fmtN(run.errors - run.failures.length)} más…</li>}
+              </ul>
+            )}
+          </div>
+        </div>
+        <div className="px-6 py-3.5 flex-shrink-0" style={{ borderTop: "1px solid #F1F5F9", background: "#FAFBFC" }}>
+          {confirm ? (
+            <div className="flex items-center gap-3">
+              <p className="flex-1 text-xs" style={{ color: "#7F1D1D" }}>{run.status === "running" ? "Detener la ejecución: los ítems ya aplicados quedan como están." : "Se quita de la fila y no se va a ejecutar."}</p>
+              <button onClick={() => setConfirm(false)} className="px-3 py-2 rounded-lg text-xs font-semibold bg-white" style={{ border: "1px solid #E2E8F0", color: "#475569" }}>Volver</button>
+              <button onClick={remove} disabled={busy} className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold" style={{ background: "#DC2626", color: "#FFF" }}>{busy && <Spinner size={12} color="#FFF" />}Confirmar</button>
+            </div>
+          ) : (
+            <div className="flex justify-between">
+              <button onClick={() => setConfirm(true)} disabled={!canRemove} className="px-3 py-2 rounded-lg text-xs font-semibold bg-white disabled:opacity-40 disabled:cursor-not-allowed" style={{ border: "1px solid #FECACA", color: "#DC2626" }}
+                title={canRemove ? "" : "Solo se pueden borrar ejecuciones en cola o en curso"}>Borrar</button>
+              <button onClick={onClose} className="px-3.5 py-2 rounded-lg text-xs font-semibold" style={{ background: "#4F46E5", color: "#FFF" }}>Cerrar</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type RowSelection = { ids: Set<number>; toggle: (id: number) => void; setMany: (ids: number[], on: boolean) => void };
+

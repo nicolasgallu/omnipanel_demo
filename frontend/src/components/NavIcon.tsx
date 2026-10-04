@@ -4,6 +4,7 @@ export type NavIconKey =
   | 'inventario'
   | 'ml'
   | 'tn'
+  | 'ejecuciones'
   | 'ventas'
   | 'envios'
   | 'competencia'
@@ -56,6 +57,14 @@ export function NavIcon({ name, size = 16 }: { name: NavIconKey; size?: number }
           <path d="M3 7.5v9h14v-9" />
           <path d="M3 7.5a2 2 0 0 0 4 0 2 2 0 0 0 3 0 2 2 0 0 0 3 0 2 2 0 0 0 4 0" />
           <path d="M8 16.5v-4h4v4" />
+        </svg>
+      )
+    case 'ejecuciones':
+      // corrida: play dentro de una tarjeta (Figma)
+      return (
+        <svg {...p}>
+          <rect x="2.5" y="2.5" width="15" height="15" rx="3.5" />
+          <path d="M8.5 7.2l4 2.8-4 2.8V7.2z" fill="currentColor" stroke="none" />
         </svg>
       )
     case 'envios':

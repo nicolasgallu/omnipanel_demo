@@ -102,3 +102,20 @@ body {
 .scroll-slim::-webkit-scrollbar { width: 6px; height: 6px; }
 .scroll-slim::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 3px; }
 .scroll-slim::-webkit-scrollbar-track { background: transparent; }
+
+/* ─── Acciones masivas (Figma v184) ─────────────────────────────────────── */
+
+@keyframes massDrop {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.massDrop {
+  animation: massDrop 0.22s ease-out;
+}

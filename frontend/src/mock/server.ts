@@ -200,6 +200,9 @@ let mockNotifSettings = {
 }
 let mockScrapflyKey: string | null = null
 
+// Corridas de acciones masivas (solo para el modo mock del front).
+const mockRuns: Array<Record<string, unknown>> = []
+
 const db = createMockDb()
 
 // Deterministic perf score per product (Figma listingScore).
@@ -1211,6 +1214,64 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
     rec.marketplace_status = null
     rec.catalog_product_id = null
     return send(200, { status: 'ok', external_id: l.external_id })
+  }
+
+  // ── Acciones masivas (mock: conteos de juguete + corridas en memoria) ──
+  if (method === 'POST' && path === '/api/mass-actions/eligibility') {
+    await sleep(400)
+    const n = Array.isArray(body.product_ids) ? body.product_ids.length : 0
+    return send(200, {
+      products: n,
+      publish: { ml: n, tn: 0 },
+      update: { ml: n, tn: n },
+      pause: { ml: n, tn: 0 },
+      delete: { ml: n, tn: n },
+      link: { ml: n, tn: 0 },
+      unlink: { ml: n, tn: 0 },
+    })
+  }
+  if (method === 'POST' && path === '/api/mass-actions') {
+    await sleep(500)
+    const ids: unknown[] = Array.isArray(body.product_ids) ? body.product_ids : []
+    if (!ids.length) return send(400, { error: 'nothing_to_run', message: 'Ninguna de las publicaciones seleccionadas puede ejecutar esta acción' })
+    const run = {
+      id: mockRuns.length + 1,
+      created_at: new Date().toISOString(),
+      user: currentUser.full_name,
+      channel: body.channel,
+      action: body.action,
+      total: ids.length,
+      ok: 0,
+      errors: 0,
+      skipped: 0,
+      status: 'queued',
+      queue_position: mockRuns.length + 1,
+    }
+    mockRuns.push(run)
+    return send(202, { run })
+  }
+  if (method === 'GET' && path === '/api/mass-actions') {
+    await sleep(300)
+    return send(200, {
+      items: [...mockRuns].reverse().map((r) => ({ ...r, failures: [] })),
+      total: mockRuns.length,
+      page: 0,
+      page_size: 100,
+    })
+  }
+  if (method === 'GET' && path.startsWith('/api/mass-actions/')) {
+    const id = Number(path.split('/').pop())
+    const run = mockRuns.find((r) => r.id === id)
+    if (!run) return send(404, { error: 'not_found', message: 'Ejecución no encontrada' })
+    return send(200, { ...run, failures: [] })
+  }
+  if (method === 'DELETE' && path.startsWith('/api/mass-actions/')) {
+    const id = Number(path.split('/').pop())
+    const run = mockRuns.find((r) => r.id === id)
+    if (!run) return send(404, { error: 'not_found', message: 'Ejecución no encontrada' })
+    run.status = 'cancelled'
+    run.skipped = Number(run.total)
+    return send(200, { id, status: 'cancelled', skipped: run.skipped })
   }
 
   // ── Tickets de soporte ──

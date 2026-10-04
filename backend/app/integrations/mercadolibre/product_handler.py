@@ -1032,3 +1032,130 @@ def _set_description(meli_id, description, token, update=False):
     else:
         logger.info("Description dont exists, nothing to do.")
 
+
+def link_catalog(payload):
+    """Vincula una publicación tradicional a la ficha del catálogo resuelta
+    por GTIN (búsqueda exacta por product_identifier; se usa la PRIMERA
+    ficha activa). Variante para ACCIONES MASIVAS del botón individual
+    (channels.py catalog/optin): no hay ficha elegida por el usuario.
+
+    Fuente de la API: búsqueda `GET /products/search?product_identifier=`
+    (misma que el buscador del wizard) + `POST /items/catalog_listings`
+    (mismo contrato que el optin individual). Devuelve True en éxito; en
+    error escribe 'Failed to Link Catalog.' + motivo legible en la fila del
+    listing y devuelve None. El POST NO se reintenta (puede duplicar).
+    """
+    product_id = payload.get('product_id')
+    account_id = payload.get('account_id')
+    token = (get_access_token(account_id) or {}).get('access_token')
+    item_data = get_data_for_meli(product_id)
+    product_listing_id = item_data.get('product_listing_id')
+    meli_id = item_data.get('meli_id')
+    gtin = (item_data.get('gtin') or '').strip()
+
+    def _fail(reason):
+        _update_record(product_listing_id, {
+            'status': 'Failed to Link Catalog.',
+            'reason': reason, 'remedy': 'None'}, PRODUCT_LISTING_TABLE)
+        return None
+
+    if not token:
+        return _fail('La cuenta no tiene access token de MercadoLibre')
+    if not meli_id:
+        return _fail('El producto no está publicado')
+    if item_data.get('catalog_product_id'):
+        return _fail('El producto ya está vinculado al catálogo')
+    if not gtin:
+        return _fail('El producto no tiene GTIN para resolver la ficha')
+
+    resp = _meli_request(
+        "GET", "https://api.mercadolibre.com/products/search", token,
+        params={"product_identifier": gtin, "status": "active"}, timeout=30)
+    if resp.status_code != 200:
+        logger.error("Link catalog search rejected (raw): %s", resp.text[:3000])
+        return _fail("No se pudo buscar la ficha por GTIN (%d)" % resp.status_code)
+    results = [r for r in (resp.json() or {}).get('results') or []
+               if isinstance(r, dict) and r.get('id')]
+    if not results:
+        return _fail("No se encontró una ficha de catálogo para el GTIN " + gtin)
+    catalog_product_id = str(results[0]['id'])
+    if len(results) > 1:
+        logger.warning("Link catalog: %d fichas para GTIN %s — se usa la primera",
+                       len(results), gtin)
+
+    resp2 = _meli_request(
+        "POST", "https://api.mercadolibre.com/items/catalog_listings", token,
+        json_body={"item_id": str(meli_id),
+                   "catalog_product_id": catalog_product_id}, timeout=30)
+    if resp2.status_code >= 300:
+        logger.error("Link catalog rejected (raw): %s", resp2.text[:3000])
+        return _fail(_meli_error_message(resp2, "MercadoLibre rechazó el vínculo"))
+    new_meli_id = (resp2.json() or {}).get('id')
+    if not new_meli_id:
+        return _fail("MercadoLibre no devolvió la nueva publicación de catálogo")
+
+    # Swap (mismo criterio que el optin individual): la de catálogo pasa a ser
+    # la principal y la tradicional queda como sombra.
+    _update_record(product_listing_id, {
+        'meli_id': str(new_meli_id),
+        'catalog_product_id': catalog_product_id,
+        'marketplace_item_id': str(meli_id),
+        'marketplace_status': item_data.get('status'),
+        'status': 'Procesando..', 'reason': None, 'remedy': None,
+    }, PRODUCT_LISTING_TABLE)
+    return True
+
+
+def unlink_catalog(payload):
+    """Saca la publicación del catálogo (variante para ACCIONES MASIVAS del
+    botón individual): 1) cierra la de catálogo, 2) reactiva la sombra
+    tradicional, 3) swap inverso. Devuelve True en éxito; en error escribe
+    'Failed to Unlink Catalog.' + motivo legible y devuelve None.
+    """
+    product_id = payload.get('product_id')
+    account_id = payload.get('account_id')
+    token = (get_access_token(account_id) or {}).get('access_token')
+    item_data = get_data_for_meli(product_id)
+    product_listing_id = item_data.get('product_listing_id')
+    meli_id = item_data.get('meli_id')
+    shadow = item_data.get('marketplace_item_id')
+
+    def _fail(reason):
+        _update_record(product_listing_id, {
+            'status': 'Failed to Unlink Catalog.',
+            'reason': reason, 'remedy': 'None'}, PRODUCT_LISTING_TABLE)
+        return None
+
+    if not token:
+        return _fail('La cuenta no tiene access token de MercadoLibre')
+    if not item_data.get('catalog_product_id'):
+        return _fail('La publicación no está vinculada al catálogo')
+    if not shadow:
+        return _fail('Esta publicación nació en el catálogo y no tiene una '
+                     'publicación tradicional a la que volver')
+
+    resp = _meli_request(
+        "PUT", "https://api.mercadolibre.com/items/" + str(meli_id), token,
+        json_body={"status": "closed"}, timeout=30)
+    if resp.status_code not in (200, 404):
+        logger.error("Unlink catalog close rejected (raw): %s", resp.text[:3000])
+        return _fail(_meli_error_message(
+            resp, "No se pudo cerrar la publicación de catálogo"))
+
+    resp2 = _meli_request(
+        "PUT", "https://api.mercadolibre.com/items/" + str(shadow), token,
+        json_body={"status": "active"}, timeout=30)
+    if resp2.status_code not in (200, 404):
+        logger.error("Unlink catalog reactivate rejected (raw): %s", resp2.text[:3000])
+        return _fail(_meli_error_message(
+            resp2, "No se pudo reactivar la publicación tradicional"))
+
+    _update_record(product_listing_id, {
+        'meli_id': str(shadow),
+        'catalog_product_id': None,
+        'marketplace_item_id': None,
+        'marketplace_status': None,
+        'status': 'Procesando..', 'reason': None, 'remedy': None,
+    }, PRODUCT_LISTING_TABLE)
+    return True
+

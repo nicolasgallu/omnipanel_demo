@@ -18,6 +18,8 @@ from app.api.platform_admin import platform_bp
 from app.api.sales import sales_bp
 from app.api.shipments import shipments_bp
 from app.api.support import support_bp
+from app.jobs.api import mass_actions_bp
+from app.jobs.internal import mass_actions_internal
 from app.settings.config import CORS_ORIGIN
 from app.utils.logger import set_event_id
 from app.webhook.item_event import item_status
@@ -52,6 +54,9 @@ def create_app():
     app.register_blueprint(messages_api_bp)
     # Panel de plataforma: admins gestionan businesses y cuentas.
     app.register_blueprint(platform_bp)
+    # Acciones masivas: API del front + endpoints internos del worker separado.
+    app.register_blueprint(mass_actions_bp)
+    app.register_blueprint(mass_actions_internal)
 
     # Pre-calienta el pool de Cloud SQL en background: la primera conexión del
     # connector tarda ~2-3s (TLS + handshake); así el primer request del

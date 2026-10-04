@@ -100,3 +100,60 @@ def enqueue(account_id, topic, notification):
         logger.exception("Cloud Tasks enqueue failed account=%s topic=%s",
                          account_id, topic)
         return False
+
+
+def enqueue_mass_action():
+    """Encola un "ticket" de lote para el worker de acciones masivas.
+
+    Modelo PUSH: cada ticket es un request HTTP a `MASS_ACTIONS_WORKER_URL`
+    (el worker separado) con OIDC. El worker procesa UN lote (next → execute*
+    → advance) y responde 200; Cloud Run lo escala a cero al quedar sin
+    tráfico. El backend encadena el ticket siguiente cuando queda trabajo
+    (engine._kick_ticket) — la cadena termina sola cuando la cola está vacía.
+    El ticket NO lleva job_id: next() elige el trabajo globalmente (FIFO por
+    cuenta), así un ticket perdido/duplicado es inofensivo (claim atómico).
+
+    Backend "stub" (dev/tests): el ticket queda en memoria sin delivery; en
+    dev el worker corre en modo DEV_LOOP (pull) y los tests manejan el engine
+    directo.
+    """
+    if is_stub():
+        with _stub_lock:
+            _stub_tasks.append({"kind": "mass-action"})
+        logger.info("task=enqueued backend=stub kind=mass-action")
+        return True
+
+    try:
+        from google.cloud import tasks_v2  # lazy: solo prod lo necesita
+
+        queue = os.getenv("MASS_ACTIONS_QUEUE") or (
+            "projects/{}/locations/{}/queues/mass-actions".format(
+                PROJECT_ID, os.getenv("TASKS_LOCATION", "us-south1")))
+        worker_url = os.getenv("MASS_ACTIONS_WORKER_URL")
+        sa_email = os.getenv("TASKS_OIDC_SERVICE_ACCOUNT")
+        if not worker_url or not sa_email:
+            raise RuntimeError(
+                "MASS_ACTIONS_WORKER_URL y TASKS_OIDC_SERVICE_ACCOUNT son"
+                " obligatorios con TASKS_BACKEND=cloudtasks")
+
+        client = tasks_v2.CloudTasksClient()
+        client.create_task(request={
+            "parent": queue,
+            "task": {
+                "http_request": {
+                    "http_method": tasks_v2.HttpMethod.POST,
+                    "url": worker_url,
+                    "oidc_token": {
+                        "service_account_email": sa_email,
+                        "audience": worker_url,
+                    },
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({"kind": "mass-action"}).encode("utf-8"),
+                },
+            },
+        })
+        logger.info("task=enqueued backend=cloudtasks kind=mass-action")
+        return True
+    except Exception:
+        logger.exception("Cloud Tasks enqueue failed (mass action)")
+        return False

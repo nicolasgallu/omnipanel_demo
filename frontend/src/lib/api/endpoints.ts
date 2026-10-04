@@ -52,6 +52,11 @@ import type {
   SalesResponse,
   ShipmentsQuery,
   ShipmentsResponse,
+  MassAction,
+  MassChannel,
+  MassEligibility,
+  MassRun,
+  MassRunStatus,
 } from './types'
 
 export const authApi = {
@@ -428,4 +433,32 @@ export const salesReportApi = {
 export const shipmentsApi = {
   list: (query: ShipmentsQuery) =>
     api<ShipmentsResponse>(`/api/shipments${queryString(query)}`),
+}
+
+// ─── Acciones masivas (cartel de selección + Ejecuciones) ───────────────────
+
+export const massActionsApi = {
+  eligibility: (productIds: number[]) =>
+    api<MassEligibility>('/api/mass-actions/eligibility', {
+      method: 'POST',
+      body: { product_ids: productIds },
+    }),
+
+  create: (action: MassAction, channel: MassChannel, productIds: number[]) =>
+    api<{ run: MassRun }>('/api/mass-actions', {
+      method: 'POST',
+      body: { action, channel, product_ids: productIds },
+    }),
+
+  list: (query: { channel?: MassChannel; status?: MassRunStatus; page?: number; page_size?: number } = {}) =>
+    api<{ items: MassRun[]; total: number; page: number; page_size: number }>(
+      `/api/mass-actions${queryString(query)}`,
+    ),
+
+  get: (id: number) => api<MassRun>(`/api/mass-actions/${id}`),
+
+  remove: (id: number) =>
+    api<{ id: number; status: MassRunStatus; skipped: number }>(`/api/mass-actions/${id}`, {
+      method: 'DELETE',
+    }),
 }

@@ -24,6 +24,8 @@ import { CatalogTag } from '../features/inventory/MLCatalog'
 import { CsvExportButton } from '../components/CsvExportButton'
 import { PencilIcon, RowEditAction, RowEditContext } from '../features/inventory/rowEdit'
 import { EditableCell } from '../features/inventory/rowEdit'
+import { SelectBox } from '../features/massActions/SelectBox'
+import { MassActionsBar } from '../features/massActions/MassActionsBar'
 
 type Platform = 'ml' | 'tn'
 
@@ -504,8 +506,14 @@ export function ChannelListingsPage({ platform }: { platform: Platform }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [drawerProduct, setDrawerProduct] = useState<Product | null>(null)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [overKey, setOverKey] = useState<string | null>(null)
+
+  // La selección se limpia al cambiar de página o de canal (Figma v184).
+  useEffect(() => {
+    setSelected(new Set())
+  }, [page, platform])
   const reorderCols = (target: string) => {
     if (!dragKey || dragKey === target) return
     const next = [...cols]
@@ -576,6 +584,24 @@ export function ChannelListingsPage({ platform }: { platform: Platform }) {
   const allCols = isML ? ML_LISTING_COLS : TN_LISTING_COLS
   const colMap = isML ? ML_COL_MAP : TN_COL_MAP
   const defs = cols.map((k) => colMap[k]).filter(Boolean)
+
+  const allChecked = items.length > 0 && items.every((p) => selected.has(p.id))
+  const toggleAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allChecked) items.forEach((p) => next.delete(p.id))
+      else items.forEach((p) => next.add(p.id))
+      return next
+    })
+  }
+  const toggleOne = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1
   const to = Math.min(page * pageSize, total)
@@ -727,6 +753,13 @@ export function ChannelListingsPage({ platform }: { platform: Platform }) {
             <table className="w-full text-xs border-collapse" style={{ minWidth: '680px' }}>
               <thead style={{ position: 'sticky', top: 0, zIndex: 10 }}>
                 <tr className="bg-white" style={{ borderBottom: '1px solid #F1F5F9' }}>
+                  <th className="w-10 px-4 py-3">
+                    <SelectBox
+                      checked={allChecked}
+                      indeterminate={selected.size > 0 && !allChecked}
+                      onChange={toggleAll}
+                    />
+                  </th>
                   {defs.map((c) => (
                     <th
                       key={c.key}
@@ -776,13 +809,13 @@ export function ChannelListingsPage({ platform }: { platform: Platform }) {
               <tbody>
                 {loading && items.length === 0 ? (
                   <tr>
-                    <td colSpan={defs.length + 1}>
+                    <td colSpan={defs.length + 2}>
                       <SpinnerText />
                     </td>
                   </tr>
                 ) : items.length === 0 ? (
                   <tr>
-                    <td colSpan={defs.length + 1} className="px-4 py-16 text-center text-muted">
+                    <td colSpan={defs.length + 2} className="px-4 py-16 text-center text-muted">
                       No hay publicaciones de {label} que coincidan con los filtros.
                     </td>
                   </tr>
@@ -797,6 +830,9 @@ export function ChannelListingsPage({ platform }: { platform: Platform }) {
                         openProduct(p)
                       }}
                     >
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <SelectBox checked={selected.has(p.id)} onChange={() => toggleOne(p.id)} />
+                      </td>
                       {defs.map((c) => (
                         <td key={c.key} className="px-2 py-3" style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>
                           {c.render(p, {
@@ -868,6 +904,8 @@ export function ChannelListingsPage({ platform }: { platform: Platform }) {
           onChanged={() => setRefreshKey((k) => k + 1)}
         />
       )}
+
+      <MassActionsBar selectedIds={[...selected]} onClear={() => setSelected(new Set())} />
     </div>
   )
 }
