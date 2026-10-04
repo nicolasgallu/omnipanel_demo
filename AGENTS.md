@@ -246,10 +246,8 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
   item_event, HTTPException handler (404 real en /api), dashboard events con
   finish/fail según resultado del pipeline.
 - **Webhooks de eventos Meli — IMPLEMENTADO** (inbox en `events` +
-  proyecciones `mercadolibre.*` + registry). Pendiente del usuario: suscribir
-  los topics en DevCenter (`messages`, `questions`, `price_suggestion`,
-  `shipments`, `public_offers`, `public_candidates`, `post_purchase`,
-  `payments`, `invoices`, `catalog_item_competition_status`). Inbox: `source='mercadolibre'`,
+  proyecciones `mercadolibre.*` + registry). Topics ya SUSCRITOS en DevCenter
+  (04/10, el usuario los suscribió todos). Inbox: `source='mercadolibre'`,
   `event_type=topic`, `external_id=_id` (hash del body si no hay `_id`),
   insert directo `status='done'`, sin `claim()`, sin columnas nuevas.
 - **OAuth callback — IMPLEMENTADO** (`GET /api/oauth/callback`): plataforma por
@@ -260,16 +258,14 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
   (tunnel de Cloudflare → :5173 Vite → proxy `/api` → :8080). Pendiente del
   usuario: registrar esa redirect_uri exacta en el DevCenter de ML y en Tienda
   Nube. Cuenta no matcheada = 400 + log (no crea cuentas).
-- **Tokens ML vencen a las 6h**: nadie usa `refresh_token` todavía
-  (`get_access_token` lee el access_token directo); falta el refresh flow.
 - **CRÍTICO**: `SECRET_KEY` tiene default público (`omnipanel-dev-secret-change-me`);
   setearla en prod o cualquiera puede forjar tokens de cualquier business.
 - Tiendanube: HMAC de webhook es stub (siempre True, `selling_event.py`).
-- Tiendanube: `pause` es local-only (la API de TN no tiene pausa real);
-  el usuario va a quitar el botón del front manualmente.
-- `ai.prompts` es global (sin filtro por business); `/api/ai/generate` hardcodea
-  prompts propios en vez de leer la tabla.
-- Passwords de employees legacy en texto plano; hash para los nuevos.
+- **RESUELTO 04/10 — prompts de IA por negocio**: `/api/ai/generate` ahora lee
+  el prompt del negocio desde `ai.prompts` (`ai_generate_title` /
+  `ai_generate_description`) con fallback a `prompt_defaults.py` (mismo
+  comportamiento que prepublish); antes hardcodeaba sus propios `SYS_PROMPTS`
+  y no respetaba lo que el negocio cargaba en Prompts AI.
 - `heartbeat()` existe pero nadie lo llama (reclaim a los 900s puede robar
   eventos largos).
 - Subida de imágenes requiere rol GCS (`storage.objectAdmin` sobre el bucket)

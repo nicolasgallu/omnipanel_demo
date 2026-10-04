@@ -43,15 +43,20 @@ def _build_engine():
             quote_plus(NAME_DB or ""),
         )
         return create_engine(
-            url, pool_pre_ping=True, pool_size=8, max_overflow=4)
+            url, pool_size=20, max_overflow=10, pool_recycle=1800)
 
     # Cloud SQL (modo deploy): connector de GCP, sin host ni password en URL.
+    # Pool más grande (20 fijas + 10 de pico) para no hacer fila bajo
+    # concurrencia, y pool_recycle=1800 recicla conexiones cada 30 min.
+    # Se quitó pool_pre_ping: cada checkout hacía un SELECT 1 extra (1
+    # round-trip por query). Si en prod aparecen errores esporádicos
+    # "MySQL server has gone away", volver a activar pool_pre_ping=True.
     return create_engine(
         "mysql+pymysql://",
         creator=_cloud_sql_connection,
-        pool_pre_ping=True,
-        pool_size=8,
-        max_overflow=4,
+        pool_size=20,
+        max_overflow=10,
+        pool_recycle=1800,
     )
 
 

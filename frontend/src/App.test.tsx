@@ -58,7 +58,6 @@ vi.mock('./lib/api/endpoints', () => ({
     tnSettings: vi.fn(),
     tnPublish: vi.fn(),
     tnAction: vi.fn(),
-    tnPause: vi.fn(),
   },
   credentialsApi: { meli: vi.fn(), saveMeli: vi.fn(), tn: vi.fn(), saveTn: vi.fn() },
   supportApi: { createTicket: vi.fn() },

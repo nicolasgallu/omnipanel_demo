@@ -1,26 +1,37 @@
 """REST API for the AI assistant (title/description generation via DeepSeek)."""
 from flask import Blueprint, jsonify, request
 
-from app.api.auth_utils import require_auth
+from app.api.auth_utils import current_business_id, require_auth
+from app.db.helpers import get_one
 from app.service.llm_api import call_deepseek_api
+from app.service.prompt_defaults import PREPUBLISH_SYS_DEFAULTS
 from app.utils.logger import logger
 
 ai_bp = Blueprint("ai_api", __name__, url_prefix="/api/ai")
 
-SYS_PROMPTS = {
-    "title": (
-        "Sos un redactor experto en ecommerce (MercadoLibre/Tienda Nube Argentina). "
-        "Mejorá el título del producto según el prompt del usuario. "
-        "OBLIGATORIO: devolvé SOLO el título mejorado, sin comillas, sin comentarios ni nada extra. "
-        "Máximo 60 caracteres."
-    ),
-    "description": (
-        "Sos un redactor experto en ecommerce (MercadoLibre/Tienda Nube Argentina). "
-        "Escribí la descripción del producto según el prompt del usuario. "
-        "OBLIGATORIO: devolvé SOLO la descripción, sin comillas, sin comentarios ni nada extra. "
-        "Usá un tono comercial claro y directo."
-    ),
+# kind (contrato del endpoint) -> columna de ai.prompts que guarda el system
+# prompt del negocio. La personalización vive en la DB (página Prompts AI),
+# no acá: antes esto hardcodeaba sus propios prompts y no respetaba lo que el
+# negocio cargaba.
+_PROMPT_COLUMNS = {
+    "title": "ai_generate_title",
+    "description": "ai_generate_description",
 }
+
+
+def _sys_prompt(kind, business_id):
+    """System prompt del negocio para `kind`, con fallback al default del
+    sistema (prompt_defaults.py): cada negocio puede personalizar su prompt
+    de título/descripción; si no lo hizo, se usa el default global."""
+    default = PREPUBLISH_SYS_DEFAULTS[kind]
+    try:
+        row = get_one(
+            "SELECT " + _PROMPT_COLUMNS[kind] + " AS prompt"
+            " FROM ai.prompts WHERE business_id = :b",
+            {"b": business_id})
+    except LookupError:
+        return default
+    return row.get("prompt") or default
 
 
 @ai_bp.route("/generate", methods=["POST"])
@@ -31,7 +42,7 @@ def generate():
     prompt = (data.get("prompt") or "").strip()
     current = (data.get("current") or "").strip()
 
-    if kind not in SYS_PROMPTS:
+    if kind not in _PROMPT_COLUMNS:
         return jsonify({"error": "bad_request", "message": "kind inválido"}), 400
     if not prompt:
         return jsonify({"error": "bad_request", "message": "Escribí un prompt"}), 400
@@ -41,7 +52,8 @@ def generate():
         user_prompt["texto_actual"] = current
 
     try:
-        text = call_deepseek_api(SYS_PROMPTS[kind], user_prompt)
+        text = call_deepseek_api(
+            _sys_prompt(kind, current_business_id()), user_prompt)
     except Exception as exc:
         logger.exception("AI generate failed (kind=%s)", kind)
         return jsonify({"error": "ai_error",

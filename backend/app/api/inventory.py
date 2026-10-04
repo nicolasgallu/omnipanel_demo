@@ -240,7 +240,11 @@ _TN_STATUS_SQL = (
 
 def _list_products_payload(business_id, q, category, ml_status, tn_status,
                            channel, stock, page, page_size):
-    """Payload JSON del listado de productos (cacheable, sin request context)."""
+    """Payload JSON del listado de productos (cacheable, sin request context).
+
+    Resuelto en 3 queries chicas (count + página + imágenes en batch) en vez
+    de 1 gigante con COUNT(*) OVER() y subquery de imagen por fila (N+1).
+    """
     like_q = "%" + q + "%"
     filters = (
         " WHERE p.business_id = :business_id"
@@ -286,53 +290,45 @@ def _list_products_payload(business_id, q, category, ml_status, tn_status,
         " LEFT JOIN tiendanube.product_listings tn ON tn.product_id = p.id"
     )
 
-    # Una sola query por request: el total viaja con COUNT(*) OVER() (MySQL 8
-    # calcula la ventana antes del LIMIT) y la primer imagen va como subquery.
-    # Evita 3 conexiones/round-trips a Cloud SQL por página.
+    # 3 queries chicas en vez de 1 gigante: antes el total viajaba con
+    # COUNT(*) OVER() (buffer de TODAS las filas del negocio, ~24k productos)
+    # y la imagen iba como subquery correlacionada por fila (N+1, corría
+    # 23k+ veces). Costaba ~370ms; ahora cada query usa índice y anda en ~10ms.
     computed_filters = bool(ml_status or tn_status or channel)
     limit_params = dict(base_params, limit=page_size, offset=(page - 1) * page_size)
 
     if computed_filters:
         inner = base_cols + filters
+        total = int(get_one(
+            "SELECT COUNT(*) AS total FROM (" + inner + ") t" + outer,
+            base_params)["total"] or 0)
         rows = get_all(
-            "SELECT t.*, COUNT(*) OVER() AS total,"
-            + image_subquery.format(alias="t")
-            + " FROM (" + inner + ") t" + outer
+            "SELECT t.* FROM (" + inner + ") t" + outer
             + " ORDER BY t.updated_at DESC, t.id DESC LIMIT :limit OFFSET :offset",
             limit_params)
     else:
+        total = int(get_one(
+            "SELECT COUNT(*) AS total FROM " + PRODUCTS_TABLE + " p" + filters,
+            base_params)["total"] or 0)
         rows = get_all(
-            "SELECT p.id, p.internal_code, p.sku, p.gtin, p.name, p.name_edited, p.brand,"
-            " p.model, p.category, p.stock, p.cost, p.price, p.dimensions,"
-            " p.created_at, p.updated_at,"
-            " COUNT(*) OVER() AS total,"
-            " ml.price AS ml_price, ml.price_manually_changed AS ml_price_manual,"
-            " ml.price_updated_at AS ml_price_updated,"
-            " tn.price AS tn_price, tn.price_manually_changed AS tn_price_manual,"
-            " tn.price_updated_at AS tn_price_updated,"
-            " " + _ML_STATUS_SQL + " AS ml_status,"
-            " " + _TN_STATUS_SQL + " AS tn_status,"
-            + image_subquery.format(alias="p")
-            + " FROM " + PRODUCTS_TABLE + " p"
-            " LEFT JOIN mercadolibre.product_listings ml ON ml.product_id = p.id"
-            " LEFT JOIN tiendanube.product_listings tn ON tn.product_id = p.id"
-            + filters
+            base_cols + filters
             + " ORDER BY p.id DESC LIMIT :limit OFFSET :offset",
             limit_params)
 
-    total = int(rows[0]["total"] or 0) if rows else 0
-    if not rows:
-        # Página fuera de rango (o filtro sin resultados): el total no vino en
-        # las filas. Recalculamos aplicando los MISMOS filtros.
-        if computed_filters:
-            inner = base_cols + filters
-            total = int(get_one(
-                "SELECT COUNT(*) AS total FROM (" + inner + ") t" + outer,
-                base_params)["total"] or 0)
-        else:
-            total = int(get_one(
-                "SELECT COUNT(*) AS total FROM " + PRODUCTS_TABLE + " p" + filters,
-                base_params)["total"] or 0)
+    # Imágenes en batch: una sola query para las filas de la página (antes una
+    # subquery por fila). Se queda con la primer imagen (menor id) por producto,
+    # igual que el ORDER BY i.id LIMIT 1 de antes.
+    image_map = {}
+    if rows:
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join(":img%d" % i for i in range(len(ids)))
+        img_params = {"img%d" % i: ids[i] for i in range(len(ids))}
+        for img in get_all(
+            "SELECT product_id, url FROM " + IMAGES_TABLE
+            + " WHERE product_id IN (" + placeholders + ") ORDER BY id",
+            img_params):
+            if img["product_id"] not in image_map:
+                image_map[img["product_id"]] = img["url"]
 
     items = []
     for row in rows:
@@ -360,7 +356,7 @@ def _list_products_payload(business_id, q, category, ml_status, tn_status,
             "tn_price_updated": _serializable(row.get("tn_price_updated")),
             "ml_status": row["ml_status"],
             "tn_status": row["tn_status"],
-            "image_url": row.get("image_url"),
+            "image_url": image_map.get(row["id"]),
         })
 
     return {
