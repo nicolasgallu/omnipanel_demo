@@ -67,9 +67,9 @@ export default function App() {
         <Route path="/inventory/mercadolibre" element={<ChannelListingsPage platform="ml" />} />
         <Route path="/inventory/tiendanube" element={<ChannelListingsPage platform="tn" />} />
         <Route path="/ventas" element={<RequireBusiness><VentasPage /></RequireBusiness>} />
-        <Route path="/envios" element={<ComingSoonPage title="Envios" icon="envios" />} />
-        <Route path="/envios/mercadolibre" element={<ShipmentsPage />} />
-        <Route path="/envios/tiendanube" element={<ComingSoonPage title="Envios · Tienda Nube" icon="tn" />} />
+        <Route path="/envios" element={<ShipmentsPage />} />
+        <Route path="/envios/mercadolibre" element={<Navigate to="/envios" replace />} />
+        <Route path="/envios/tiendanube" element={<Navigate to="/envios" replace />} />
         <Route path="/competencia" element={<ComingSoonPage title="Competencia" icon="competencia" />} />
         <Route path="/prompts-ai" element={<PromptsAIPage />} />
         <Route path="/preguntas" element={<PreguntasPage />} />

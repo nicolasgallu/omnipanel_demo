@@ -37,7 +37,6 @@ import type {
   PromptsResponse,
   ScrapflySettings,
   SettingsInfo,
-  ShipmentsResponse,
   TNConfig,
   TNCredentials,
   TNListingRow,
@@ -51,6 +50,8 @@ import type {
   SalesReport,
   ReportQuery,
   SalesResponse,
+  ShipmentsQuery,
+  ShipmentsResponse,
 } from './types'
 
 export const authApi = {
@@ -326,8 +327,6 @@ export const channelsApi = {
   tnExportCsv: (params: { columns: string; limit: number; q?: string; status?: string; category?: string }) =>
     apiBlob(`/api/tiendanube/listings/export.csv${queryString(params)}`),
 
-  mlShipments: (params?: { page?: number; page_size?: number; q?: string; status?: string; logistic_type?: string }) =>
-    api<ShipmentsResponse>('/api/mercadolibre/shipments' + queryString(params ?? {})),
   shipmentLabel: (external_id: string) =>
     apiBlob('/api/mercadolibre/shipments/' + encodeURIComponent(external_id) + '/label'),
 
@@ -422,4 +421,11 @@ export const salesApi = {
 export const salesReportApi = {
   get: (query: ReportQuery) =>
     api<SalesReport>(`/api/sales/report${queryString(query)}`),
+}
+
+// ─── Envíos unificados (panel único ML + Tienda Nube) ────────────────────────
+
+export const shipmentsApi = {
+  list: (query: ShipmentsQuery) =>
+    api<ShipmentsResponse>(`/api/shipments${queryString(query)}`),
 }

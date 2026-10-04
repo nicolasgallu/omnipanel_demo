@@ -109,10 +109,31 @@ def meli_payload(status, quantity=1, unit_price=PRODUCT_PRICE, at=None):
 
 
 def tn_payload(status, payment_status, quantity=1, unit_price=PRODUCT_PRICE, at=None):
+    """Payload TN fake con contexto de envío (doc oficial del Order resource):
+    shipping_status + shipping_address + shipping_option + tracking. El estado
+    de envío derivado sigue al order.status: open -> unpacked/shipped,
+    closed -> delivered, cancelled -> cancelled."""
+    shipping_status = "delivered" if status == "closed" else "unpacked"
+    tracking = "FAKE-TRACK-%s" % (str(at)[11:13] if at else "TN")
     return {
         "number": 999999,
         "status": status,
         "payment_status": payment_status,
+        "shipping_status": shipping_status,
+        "shipping_pickup_type": "ship",
+        "shipping": "table",
+        "shipping_option": "Correo Argentino a domicilio",
+        "shipping_tracking_number": tracking if status in ("closed",) else None,
+        "shipping_cost_customer": "950",
+        "shipping_cost_owner": "0",
+        "shipping_min_days": 2,
+        "shipping_max_days": 5,
+        "shipping_address": {
+            "address": "Av. Siempre Viva", "number": "742", "floor": "",
+            "locality": "CABA", "city": "Buenos Aires",
+            "province": "Buenos Aires", "zipcode": "1407",
+            "country": "AR", "phone": None,
+        },
         "products": [{
             "sku": PRODUCT_SKU,
             "name": PRODUCT_TITLE,
@@ -245,9 +266,10 @@ def cleanup():
     from app.db.helpers import execute
     for table in ("mercadolibre.orders", "tiendanube.orders"):
         execute("DELETE FROM " + table + " WHERE order_id LIKE 'FAKE-%'")
+    execute("DELETE FROM tiendanube.shipments WHERE order_id LIKE 'FAKE-%'")
     execute("DELETE FROM inventory.stock_movements WHERE order_id LIKE 'FAKE-%'")
     execute("DELETE FROM platform_accounts.events WHERE external_id LIKE 'FAKE-%'")
-    print("Fake orders FAKE-* eliminadas (orders + movements + events).")
+    print("Fake orders FAKE-* eliminadas (orders + shipments + movements + events).")
 
 
 # ─── main ──────────────────────────────────────────────────────────────────────

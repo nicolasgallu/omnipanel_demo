@@ -150,16 +150,20 @@ let mockEmployees = [
   { id: 4, full_name: 'Lucía Fernández', email: 'lucia@importfull.com', active: false, created_at: '2026-06-19' },
 ]
 
-// ── Envíos de MercadoLibre (Figma SHIPMENTS, forma de mercadolibre.shipments) ──
+// ── Envíos unificados (GET /api/shipments — contrato FINAL Figma 04/10) ──
+// status = estado POR FILA (enumerado único ML/TN); substatus/logistic_type/
+// mode solo ML; shipping_method/tracking_url solo TN.
 const MOCK_SHIPMENTS: Shipment[] = [
-  { external_id: '43308302844', order_id: '2000003508419013', status: 'ready_to_ship', substatus: 'ready_to_print', tracking_number: null, logistic_type: 'cross_docking', mode: 'me2', receiver: { city: 'São Paulo', state: 'SP', zip_code: '01310-100' }, items: [{ id: 'MLB123456789', title: 'Fone de Ouvido Bluetooth', quantity: 1 }], last_updated: '2026-09-25T10:30:00' },
-  { external_id: '28264263908', order_id: '2000003508419013', status: 'shipped', substatus: 'out_for_delivery', tracking_number: 'OP123456789AR', logistic_type: 'drop_off', mode: 'me1', receiver: { city: 'Rio de Janeiro', state: 'RJ', zip_code: '20040-020' }, items: [{ id: 'MLB987654321', title: 'Capa de Celular', quantity: 2 }], last_updated: '2026-09-27T08:00:00' },
-  { external_id: '43120094551', order_id: '2000003508420115', status: 'delivered', substatus: null, tracking_number: 'OP998877665AR', logistic_type: 'fulfillment', mode: 'me2', receiver: { city: 'Belo Horizonte', state: 'MG', zip_code: '30110-002' }, items: [{ id: 'MLB556677889', title: 'Teclado Mecânico RGB', quantity: 1 }], last_updated: '2026-09-26T17:42:00' },
-  { external_id: '43990010233', order_id: '2000003508421220', status: 'handling', substatus: 'manufacturing', tracking_number: null, logistic_type: 'self_service', mode: 'me2', receiver: { city: 'Curitiba', state: 'PR', zip_code: '80010-010' }, items: [{ id: 'MLB111222333', title: 'Mouse Gamer 12000 DPI', quantity: 1 }, { id: 'MLB111222999', title: 'Mousepad XL', quantity: 1 }], last_updated: '2026-09-27T09:20:00' },
-  { external_id: '44001299877', order_id: '2000003508422331', status: 'pending', substatus: null, tracking_number: null, logistic_type: 'cross_docking', mode: 'me2', receiver: { city: 'Porto Alegre', state: 'RS', zip_code: '90010-150' }, items: [{ id: 'MLB444555666', title: 'Carregador USB-C 65W', quantity: 3 }], last_updated: '2026-09-27T07:05:00' },
-  { external_id: '42887654120', order_id: '2000003508423442', status: 'not_delivered', substatus: 'delivery_failed', tracking_number: 'OP334455112AR', logistic_type: 'drop_off', mode: 'me1', receiver: { city: 'Salvador', state: 'BA', zip_code: '40010-000' }, items: [{ id: 'MLB777888999', title: 'Smartwatch Fit Pro', quantity: 1 }], last_updated: '2026-09-26T14:10:00' },
-  { external_id: '43550998741', order_id: '2000003508424553', status: 'delivered', substatus: null, tracking_number: 'OP221100443AR', logistic_type: 'fulfillment', mode: 'me2', receiver: { city: 'Fortaleza', state: 'CE', zip_code: '60010-000' }, items: [{ id: 'MLB222333444', title: 'Caixa de Som Portátil', quantity: 1 }], last_updated: '2026-09-25T19:55:00' },
-  { external_id: '44120557001', order_id: '2000003508425664', status: 'ready_to_ship', substatus: 'printed', tracking_number: 'OP556677889AR', logistic_type: 'cross_docking', mode: 'me2', receiver: { city: 'Recife', state: 'PE', zip_code: '50010-000' }, items: [{ id: 'MLB888999000', title: 'Cabo HDMI 2.1 · 2m', quantity: 2 }], last_updated: '2026-09-27T06:40:00' },
+  { id: 'ml-43308302844', channel: 'ml', external_id: '43308302844', order_id: '2000003508419013', status: 'ready_to_ship', substatus: 'ready_to_print', logistic_type: 'cross_docking', mode: 'me2', shipping_method: null, tracking_number: null, tracking_url: null, receiver: { city: 'Córdoba', state: 'Córdoba', zip_code: '5000' }, items: [{ id: 'MLB123', title: 'Auriculares Bluetooth', quantity: 1 }], last_updated: '2026-09-25T10:30:00' },
+  { id: 'ml-28264263908', channel: 'ml', external_id: '28264263908', order_id: '2000003508419013', status: 'shipped', substatus: 'out_for_delivery', logistic_type: 'drop_off', mode: 'me1', shipping_method: null, tracking_number: 'OP123456789AR', tracking_url: null, receiver: { city: 'Buenos Aires', state: 'Buenos Aires', zip_code: '1407' }, items: [{ id: 'MLB456', title: 'Funda de celular', quantity: 2 }], last_updated: '2026-09-27T08:00:00' },
+  { id: 'ml-43120094551', channel: 'ml', external_id: '43120094551', order_id: '2000003508420115', status: 'delivered', substatus: null, logistic_type: 'fulfillment', mode: 'me2', shipping_method: null, tracking_number: 'OP998877665AR', tracking_url: null, receiver: { city: 'Rosario', state: 'Santa Fe', zip_code: '2000' }, items: [{ id: 'MLB789', title: 'Teclado mecánico RGB', quantity: 1 }], last_updated: '2026-09-26T17:42:00' },
+  { id: 'ml-43990010233', channel: 'ml', external_id: '43990010233', order_id: '2000003508421220', status: 'handling', substatus: 'manufacturing', logistic_type: 'self_service', mode: 'me2', shipping_method: null, tracking_number: null, tracking_url: null, receiver: { city: 'Mendoza', state: 'Mendoza', zip_code: '5500' }, items: [{ id: 'MLB321', title: 'Mouse gamer 12000 DPI', quantity: 1 }, { id: 'MLB654', title: 'Mousepad XL', quantity: 1 }], last_updated: '2026-09-27T09:20:00' },
+  { id: 'ml-44001299877', channel: 'ml', external_id: '44001299877', order_id: '2000003508422331', status: 'pending', substatus: null, logistic_type: 'cross_docking', mode: 'me2', shipping_method: null, tracking_number: null, tracking_url: null, receiver: { city: 'Neuquén', state: 'Neuquén', zip_code: '8300' }, items: [{ id: 'MLB987', title: 'Cargador USB-C 65W', quantity: 3 }], last_updated: '2026-09-27T07:05:00' },
+  { id: 'ml-42887654120', channel: 'ml', external_id: '42887654120', order_id: '2000003508423442', status: 'not_delivered', substatus: 'delivery_failed', logistic_type: 'drop_off', mode: 'me1', shipping_method: null, tracking_number: 'OP334455112AR', tracking_url: null, receiver: { city: 'La Plata', state: 'Buenos Aires', zip_code: '1900' }, items: [{ id: 'MLB111', title: 'Smartwatch Fit Pro', quantity: 1 }], last_updated: '2026-09-26T14:10:00' },
+  { id: 'tn-1425', channel: 'tn', external_id: '1425', order_id: '1425', status: 'pending', substatus: null, logistic_type: null, mode: null, shipping_method: 'Correo Argentino a domicilio', tracking_number: null, tracking_url: null, receiver: { city: 'Buenos Aires', state: 'Buenos Aires', zip_code: '1407' }, items: [{ id: 'S1', title: 'Vestido midi floral', quantity: 1 }], last_updated: '2026-09-27T09:45:00' },
+  { id: 'tn-1426', channel: 'tn', external_id: '1426', order_id: '1426', status: 'shipped', substatus: null, logistic_type: null, mode: null, shipping_method: 'Andreani a domicilio', tracking_number: 'AND-9988-771', tracking_url: 'https://seguimiento.andreani.com/#!/AND-9988-771', receiver: { city: 'Mar del Plata', state: 'Buenos Aires', zip_code: '7600' }, items: [{ id: 'S2', title: 'Campera de jean', quantity: 1 }], last_updated: '2026-09-27T07:20:00' },
+  { id: 'tn-1427', channel: 'tn', external_id: '1427', order_id: '1427', status: 'delivered', substatus: null, logistic_type: null, mode: null, shipping_method: 'Retiro en tienda', tracking_number: 'CA-5566-88', tracking_url: null, receiver: { city: 'Córdoba', state: 'Córdoba', zip_code: '5000' }, items: [{ id: 'S3', title: 'Zapatillas urbanas', quantity: 1 }], last_updated: '2026-09-26T19:10:00' },
+  { id: 'tn-1428', channel: 'tn', external_id: '1428', order_id: '1428', status: 'cancelled', substatus: null, logistic_type: null, mode: null, shipping_method: 'Correo Argentino a domicilio', tracking_number: null, tracking_url: null, receiver: { city: 'Salta', state: 'Salta', zip_code: '4400' }, items: [{ id: 'S4', title: 'Remera básica', quantity: 2 }], last_updated: '2026-09-26T15:30:00' },
 ]
 
 // ── Credenciales mock (Configuración > MercadoLibre / Tienda Nube) ──
@@ -991,42 +995,48 @@ async function handle(req: IncomingMessage, res: ServerResponse) {
   if (listingsHandler('ml')) return
   if (listingsHandler('tn')) return
 
-  // ── Envíos de MercadoLibre ──
-  if (method === 'GET' && path === '/api/mercadolibre/shipments') {
+  // ── Envíos unificados (ML + Tienda Nube) — contrato FINAL Figma ──
+  if (method === 'GET' && path === '/api/shipments') {
     await sleep(400)
     const q = (url.searchParams.get('q') || '').toLowerCase()
-    const status = url.searchParams.get('status') || ''
-    const logistic = url.searchParams.get('logistic_type') || ''
-    const page = Math.max(1, Number(url.searchParams.get('page') || 1))
-    const pageSize = Math.min(200, Number(url.searchParams.get('page_size') || 50))
+    const channel = url.searchParams.get('channel') || 'all'
+    const statusGroup = url.searchParams.get('status_group') || 'all'
+    const page = Math.max(0, Number(url.searchParams.get('page') || 0))
+    const pageSize = Math.min(200, Math.max(1, Number(url.searchParams.get('page_size') || 50)))
 
-    const shipMatches = (s: Shipment) =>
-      !q ||
-      [s.external_id, s.order_id ?? '', s.tracking_number ?? '', s.receiver.city, ...s.items.map((i) => i.title)]
-        .some((v) => v.toLowerCase().includes(q))
-    const searched = MOCK_SHIPMENTS.filter(shipMatches)
-    // cross_docking agrupa también xd_drop_off (igual que el backend).
-    const logisticMatch = (s: Shipment) =>
-      logistic === 'cross_docking'
-        ? s.logistic_type === 'cross_docking' || s.logistic_type === 'xd_drop_off'
-        : s.logistic_type === logistic
-    const rows = searched.filter(
-      (s) => (!status || s.status === status) && (!logistic || logisticMatch(s)),
-    )
-    const start = (page - 1) * pageSize
+    // Grupo de un estado por fila (pending+handling → to_prepare, etc.).
+    const groupOf = (s: Shipment): string =>
+      s.status === 'pending' || s.status === 'handling' ? 'to_prepare'
+        : s.status === 'ready_to_ship' || s.status === 'shipped' ? 'in_transit'
+        : s.status === 'delivered' ? 'delivered'
+        : s.status === 'not_delivered' ? 'not_delivered'
+        : s.status === 'cancelled' ? 'cancelled'
+        : ''
+
+    const matches = (s: Shipment) =>
+      (!q ||
+        [s.external_id, s.order_id ?? '', s.tracking_number ?? '',
+         s.receiver.city, s.shipping_method ?? '', ...s.items.map((i) => i.title)]
+          .some((v) => v.toLowerCase().includes(q))) &&
+      (channel === 'all' || s.channel === channel)
+    const searched = MOCK_SHIPMENTS.filter(matches)
+    // counts (strip) NO respetan el filtro de status_group; sí channel y q.
     const counts = {
       total: searched.length,
-      to_prepare: searched.filter((s) => s.status === 'pending' || s.status === 'handling').length,
-      in_transit: searched.filter((s) => s.status === 'ready_to_ship' || s.status === 'shipped').length,
-      delivered: searched.filter((s) => s.status === 'delivered').length,
-      incidents: searched.filter((s) => s.status === 'not_delivered' || s.status === 'cancelled').length,
+      to_prepare: searched.filter((s) => groupOf(s) === 'to_prepare').length,
+      in_transit: searched.filter((s) => groupOf(s) === 'in_transit').length,
+      delivered: searched.filter((s) => groupOf(s) === 'delivered').length,
+      incidents: searched.filter((s) => groupOf(s) === 'not_delivered' || groupOf(s) === 'cancelled').length,
     }
+    const rows = statusGroup === 'all' ? searched : searched.filter((s) => groupOf(s) === statusGroup)
+    const start = page * pageSize
     return send(200, {
       items: rows.slice(start, start + pageSize),
       total: rows.length,
       page,
       page_size: pageSize,
       counts,
+      account_total: MOCK_SHIPMENTS.length,
     })
   }
 

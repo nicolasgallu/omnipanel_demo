@@ -3,10 +3,13 @@
 import type { ReactNode } from 'react'
 import type { OrderStatus, SaleOrder, SalesChannel, StockSync } from '../../lib/api/types'
 import { fmtMoney } from '../../lib/format'
+import { ChannelBadge } from '../../components/ChannelBadge'
 
-export const SALES_CHANNELS: Record<SalesChannel, { name: string; text: string; bg: string; border: string }> = {
-  ml: { name: 'MercadoLibre', text: '#B45309', bg: '#FEF7E6', border: '#FDE68A' },
-  tn: { name: 'Tienda Nube', text: '#4F46E5', bg: '#EEF2FF', border: '#C7D2FE' },
+export { ChannelBadge } from '../../components/ChannelBadge'
+
+export const SALES_CHANNELS: Record<SalesChannel, { name: string }> = {
+  ml: { name: 'MercadoLibre' },
+  tn: { name: 'Tienda Nube' },
 }
 
 export const ORDER_STATUS: Record<OrderStatus, { label: string; color: string; bg: string }> = {
@@ -30,15 +33,6 @@ export const fmtSaleDate = (iso: string | null | undefined): string => {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-export function ChannelBadge({ channel }: { channel: SalesChannel }) {
-  const c = SALES_CHANNELS[channel]
-  return (
-    <span className="inline-flex items-center rounded-full px-2 py-0.5 whitespace-nowrap" style={{ fontSize: '10px', fontWeight: 700, color: c.text, background: c.bg, border: `1px solid ${c.border}` }}>
-      {c.name}
-    </span>
-  )
 }
 
 export function OrderStatusBadge({ status }: { status: OrderStatus }) {

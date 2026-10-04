@@ -576,6 +576,26 @@ CREATE TABLE IF NOT EXISTS tiendanube.orders (
     UNIQUE KEY uq_order_account (account_id, order_id)
 );
 
+-- Envíos de Tienda Nube (panel unificado de Envíos, espejo de
+-- mercadolibre.shipments): TN no tiene un recurso "shipment" aparte — el
+-- envío es la propia orden (1:1), así que la identidad es (account_id,
+-- order_id) en vez de un external_id. `status` guarda el estado NORMALIZADO
+-- del panel (to_prepare|in_transit|delivered|cancelled; not_delivered no
+-- existe en TN) porque el order.status crudo es ambiguo para una vista de
+-- envíos; `data` guarda el contexto de envío completo (shipping_status,
+-- shipping_address, shipping_option, tracking, fulfillments...).
+CREATE TABLE IF NOT EXISTS tiendanube.shipments (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    account_id INT NOT NULL,
+    order_id VARCHAR(255) NOT NULL,            -- la orden ES el envío
+    status VARCHAR(50) NULL,                   -- normalizado (ver arriba)
+    data JSON NULL,                            -- contexto de envío de la orden
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_shipments_account_order (account_id, order_id)
+);
+
 -- ============================================================
 -- SCHEMA: ai (prompts de IA)
 -- ============================================================

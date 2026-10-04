@@ -21,6 +21,7 @@ from app.settings.config import SCHEMA_MERCADOLIBRE, SCHEMA_TIENDANUBE
 
 MELI_ORDERS = SCHEMA_MERCADOLIBRE + ".orders"
 TNUDE_ORDERS = SCHEMA_TIENDANUBE + ".orders"
+TN_SHIPMENTS = SCHEMA_TIENDANUBE + ".shipments"
 
 # Estados normalizados del panel de ventas.
 STATUS_PENDING_PAYMENT = "pending_payment"
@@ -90,6 +91,7 @@ def _normalize_meli(order):
         "currency": order.get("currency_id"),
         "date_created": order.get("date_created"),
         "link": None,
+        "pack_id": str(order["pack_id"]) if order.get("pack_id") is not None else None,
         "items": items,
     }
 
@@ -115,6 +117,7 @@ def _normalize_tnube(order):
         "currency": order.get("currency"),
         "date_created": order.get("created_at"),
         "link": None,
+        "pack_id": None,
         "items": items,
     }
 
@@ -215,17 +218,18 @@ def record_order(account, platform, order_id, order):
         "currency": normalized.get("currency"),
         "date_created": _to_mysql_dt(normalized.get("date_created")),
         "link": normalized.get("link"),
+        "pack_id": normalized.get("pack_id"),
         "data": json.dumps(normalized["items"], ensure_ascii=False),
         "status_history": json.dumps(history, ensure_ascii=False),
     }
 
     columns = ("order_id", "account_id", "channel_status",
                "buyer_name", "buyer_external_id", "total", "currency",
-               "date_created", "link", "data", "status_history")
+               "date_created", "link", "pack_id", "data", "status_history")
     if platform == "tiendanube":
         columns = ("order_id", "account_id", "channel_status", "payment_status",
                    "buyer_name", "buyer_external_id", "total", "currency",
-                   "date_created", "link", "data", "status_history")
+                   "date_created", "link", "pack_id", "data", "status_history")
 
     placeholders = ", ".join(":" + c for c in columns)
     updates = ", ".join(
@@ -236,6 +240,123 @@ def record_order(account, platform, order_id, order):
         + " VALUES (" + placeholders + ")"
         + " ON DUPLICATE KEY UPDATE " + updates,
         values)
+
+    # Tienda Nube: el envío vive DENTRO de la orden (1:1, no hay recurso
+    # shipments aparte como en Meli) — proyectarlo a tiendanube.shipments
+    # para el panel unificado de Envíos. Best-effort: un fallo acá no debe
+    # romper el registro de la orden.
+    if platform == "tiendanube":
+        record_tn_shipment(account, order_id, order)
+
+
+# ─── Tienda Nube: proyección de envíos (tiendanube.shipments) ──────────────────
+#
+# Doc oficial del Order resource de Tiendanube (Nuvemshop API):
+# https://tiendanube.github.io/api-documentation/resources/order
+# - `shipping_status`: "unpacked" | "shipped" (fulfilled) | "unshipped"
+#   (unfulfilled) | "delivered" | "partially_packed" | "partially_fulfilled".
+# - Campos planos: shipping_pickup_type (ship|pickup), shipping (enum
+#   branch|table|not-provided), shipping_option (nombre legible),
+#   shipping_tracking_number, shipping_cost_customer/owner, shipping_min/max_days,
+#   shipping_address {address, number, floor, locality, city, province, zipcode,
+#   country, phone, name, ...}.
+# - Con `?aggregates=fulfillment_orders` llega además `fulfillments`
+#   (o `fulfillment_orders`): detalle por paquete con status, carrier,
+#   tracking_info{url,code}, destination, labels.
+
+# Enumerado de estado POR FILA del panel de Envíos (contrato final del Figma,
+# 04/10): ML guarda su `status` crudo tal cual; TN mapea su `shipping_status`
+# a este mismo enumerado al guardar. Los GRUPOS (to_prepare|in_transit|
+# delivered|not_delivered|cancelled) para filtros/métricas se calculan en la
+# API con un CASE sobre estos valores (pending+handling → to_prepare;
+# ready_to_ship+shipped → in_transit; delivered; not_delivered; cancelled).
+
+_TN_SHIPPING_STATUS_PENDING = ("unpacked",)
+_TN_SHIPPING_STATUS_HANDLING = ("unshipped", "partially_packed")
+_TN_SHIPPING_STATUS_SHIPPED = ("shipped", "partially_fulfilled")
+
+
+def normalize_tn_shipment_status(order):
+    """order.status/shipping_status -> estado POR FILA del panel de Envíos.
+
+    Equivalencia TN (propuesta del usuario, confirmada contra la doc del
+    Order resource): unpacked -> pending; unshipped/partially_packed ->
+    handling; shipped/partially_fulfilled -> shipped; delivered -> delivered;
+    order cancelada -> cancelled (la reversa SIEMPRE primero). TN no expone
+    "falla del carrier", así que not_delivered nunca lo produce (solo ML).
+
+    Fallback para payloads viejos sin shipping_status: closed -> delivered;
+    open con tracking -> shipped; open sin tracking -> pending.
+    """
+    order = order or {}
+    if order.get("status") == "cancelled":
+        return "cancelled"
+    shipping_status = order.get("shipping_status")
+    if shipping_status in _TN_SHIPPING_STATUS_PENDING:
+        return "pending"
+    if shipping_status in _TN_SHIPPING_STATUS_HANDLING:
+        return "handling"
+    if shipping_status in _TN_SHIPPING_STATUS_SHIPPED:
+        return "shipped"
+    if shipping_status == "delivered":
+        return "delivered"
+    if order.get("status") == "closed":
+        return "delivered"
+    if order.get("status") == "open":
+        if order.get("shipping_tracking_number"):
+            return "shipped"
+        return "pending"
+    return None
+
+
+def tn_shipment_context(order):
+    """Contexto de envío de la orden TN: lo que se guarda en `data` de la fila.
+
+    Solo campos de envío (nunca el payload completo de la orden): el resto ya
+    vive en tiendanube.orders. `fulfillments` trae el detalle por paquete
+    cuando el fetch pide aggregates=fulfillment_orders (tracking_info.url).
+    """
+    order = order or {}
+    return {
+        "shipping_status": order.get("shipping_status"),
+        "shipping_pickup_type": order.get("shipping_pickup_type"),
+        "shipping": order.get("shipping"),
+        "shipping_option": order.get("shipping_option"),
+        "shipping_tracking_number": order.get("shipping_tracking_number"),
+        "shipping_cost_customer": order.get("shipping_cost_customer"),
+        "shipping_cost_owner": order.get("shipping_cost_owner"),
+        "shipping_min_days": order.get("shipping_min_days"),
+        "shipping_max_days": order.get("shipping_max_days"),
+        "shipping_address": order.get("shipping_address"),
+        "fulfillments": order.get("fulfillments") or order.get("fulfillment_orders"),
+    }
+
+
+def record_tn_shipment(account, order_id, order):
+    """Upsert de la fila de envío (1:1 con la orden) en tiendanube.shipments.
+
+    `status` guarda el estado POR FILA del panel (enumerado único con ML:
+    pending|handling|ready_to_ship|shipped|delivered|not_delivered|cancelled)
+    — el crudo `shipping_status` queda en `data`. El mapeo se decide acá, una
+    vez, al guardar (el order.status crudo es ambiguo para una vista de
+    envíos). Idempotente por (account_id, order_id).
+    """
+    status = normalize_tn_shipment_status(order)
+    if status is None:
+        return
+    execute(
+        "INSERT INTO " + TN_SHIPMENTS
+        + " (account_id, order_id, status, data)"
+        + " VALUES (:account_id, :order_id, :status, :data)"
+        + " ON DUPLICATE KEY UPDATE status = VALUES(status),"
+        + " data = VALUES(data), updated_at = NOW()",
+        {
+            "account_id": account["id"],
+            "order_id": str(order_id),
+            "status": status,
+            "data": json.dumps(tn_shipment_context(order), ensure_ascii=False),
+        },
+    )
 
 
 def _to_number(value):

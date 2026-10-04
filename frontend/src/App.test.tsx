@@ -53,7 +53,7 @@ vi.mock('./lib/api/endpoints', () => ({
     mlSellingCosts: vi.fn(),
     mlListings: vi.fn(),
     tnListings: vi.fn(),
-    mlShipments: vi.fn(),
+    shipmentLabel: vi.fn(),
     mlPictures: vi.fn(),
     tnSettings: vi.fn(),
     tnPublish: vi.fn(),
@@ -64,6 +64,7 @@ vi.mock('./lib/api/endpoints', () => ({
   supportApi: { createTicket: vi.fn() },
   salesApi: { list: mocks.salesList, get: vi.fn() },
   salesReportApi: { get: vi.fn() },
+  shipmentsApi: { list: vi.fn() },
 }))
 
 const BUSINESS: User = { id: 1, business_id: 1, role: 'business', email: 'owner@x.com', full_name: 'Dueño' }

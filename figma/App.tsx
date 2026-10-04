@@ -2356,10 +2356,7 @@ const NAV: NavItem[] = [
     { label: "Tienda Nube", icon: "tn" },
   ] },
   { label: "Ventas", icon: "ventas" },
-  { label: "Envios", icon: "envios", children: [
-    { label: "MercadoLibre", icon: "ml", key: "Envios MercadoLibre" },
-    { label: "Tienda Nube", icon: "tn", key: "Envios Tienda Nube" },
-  ] },
+  { label: "Envíos", icon: "envios" },
   { label: "Competencia", icon: "competencia" },
   { label: "Prompts AI", icon: "prompts" },
   { label: "Preguntas", icon: "preguntas" },
@@ -3583,11 +3580,14 @@ function DomainSummary({ domain, variant }: { domain: "ml" | "tn"; variant: Summ
   return variant === "strip" ? <StatStrip stats={stats} /> : <StatAccentCards stats={stats} />;
 }
 
-// ─── Envíos · MercadoLibre ────────────────────────────────────────────────────
+// ─── Envíos (MercadoLibre + Tienda Nube) ────────────────────────────────────────────────────
 
 type ShipStatus = "pending" | "handling" | "ready_to_ship" | "shipped" | "delivered" | "not_delivered" | "cancelled";
 type Shipment = {
   id: number;
+  channel: SalesChannelKey;
+  shipping_method: string | null;   // TN: método de envío (ML usa logistic_type)
+  tracking_url: string | null;
   external_id: string;
   order_id: string;
   status: ShipStatus;
@@ -3630,14 +3630,24 @@ function fmtShipDate(iso: string) {
 }
 
 const SHIPMENTS: Shipment[] = [
-  { id: 43308302844, external_id: "43308302844", order_id: "2000003508419013", status: "ready_to_ship", substatus: "ready_to_print", tracking_number: null, logistic_type: "cross_docking", mode: "me2", receiver: { city: "São Paulo", state: "SP", zip_code: "01310-100" }, items: [{ id: "MLB123456789", title: "Fone de Ouvido Bluetooth", quantity: 1 }], last_updated: "2026-09-25T10:30:00" },
-  { id: 28264263908, external_id: "28264263908", order_id: "2000003508419013", status: "shipped", substatus: "out_for_delivery", tracking_number: "OP123456789AR", logistic_type: "drop_off", mode: "me1", receiver: { city: "Rio de Janeiro", state: "RJ", zip_code: "20040-020" }, items: [{ id: "MLB987654321", title: "Capa de Celular", quantity: 2 }], last_updated: "2026-09-27T08:00:00" },
-  { id: 43120094551, external_id: "43120094551", order_id: "2000003508420115", status: "delivered", substatus: null, tracking_number: "OP998877665AR", logistic_type: "fulfillment", mode: "me2", receiver: { city: "Belo Horizonte", state: "MG", zip_code: "30110-002" }, items: [{ id: "MLB556677889", title: "Teclado Mecânico RGB", quantity: 1 }], last_updated: "2026-09-26T17:42:00" },
-  { id: 43990010233, external_id: "43990010233", order_id: "2000003508421220", status: "handling", substatus: "manufacturing", tracking_number: null, logistic_type: "self_service", mode: "me2", receiver: { city: "Curitiba", state: "PR", zip_code: "80010-010" }, items: [{ id: "MLB111222333", title: "Mouse Gamer 12000 DPI", quantity: 1 }, { id: "MLB111222999", title: "Mousepad XL", quantity: 1 }], last_updated: "2026-09-27T09:20:00" },
-  { id: 44001299877, external_id: "44001299877", order_id: "2000003508422331", status: "pending", substatus: null, tracking_number: null, logistic_type: "cross_docking", mode: "me2", receiver: { city: "Porto Alegre", state: "RS", zip_code: "90010-150" }, items: [{ id: "MLB444555666", title: "Carregador USB-C 65W", quantity: 3 }], last_updated: "2026-09-27T07:05:00" },
-  { id: 42887654120, external_id: "42887654120", order_id: "2000003508423442", status: "not_delivered", substatus: "delivery_failed", tracking_number: "OP334455112AR", logistic_type: "drop_off", mode: "me1", receiver: { city: "Salvador", state: "BA", zip_code: "40010-000" }, items: [{ id: "MLB777888999", title: "Smartwatch Fit Pro", quantity: 1 }], last_updated: "2026-09-26T14:10:00" },
-  { id: 43550998741, external_id: "43550998741", order_id: "2000003508424553", status: "delivered", substatus: null, tracking_number: "OP221100443AR", logistic_type: "fulfillment", mode: "me2", receiver: { city: "Fortaleza", state: "CE", zip_code: "60010-000" }, items: [{ id: "MLB222333444", title: "Caixa de Som Portátil", quantity: 1 }], last_updated: "2026-09-25T19:55:00" },
-  { id: 44120557001, external_id: "44120557001", order_id: "2000003508425664", status: "ready_to_ship", substatus: "printed", tracking_number: "OP556677889AR", logistic_type: "cross_docking", mode: "me2", receiver: { city: "Recife", state: "PE", zip_code: "50010-000" }, items: [{ id: "MLB888999000", title: "Cabo HDMI 2.1 · 2m", quantity: 2 }], last_updated: "2026-09-27T06:40:00" },
+  // MercadoLibre — el identificador visible es el nº de envío
+  { id: 43308302844, channel: "ml", external_id: "43308302844", order_id: "2000003508419013", status: "ready_to_ship", substatus: "ready_to_print", tracking_number: null, tracking_url: null, logistic_type: "cross_docking", mode: "me2", shipping_method: null, receiver: { city: "Palermo", state: "CABA", zip_code: "C1425" }, items: [{ id: "MLA123456789", title: "Set Tabla Gourmet", quantity: 1 }], last_updated: "2026-10-04T10:30:00" },
+  { id: 28264263908, channel: "ml", external_id: "28264263908", order_id: "2000003508419014", status: "shipped", substatus: "out_for_delivery", tracking_number: "OP123456789AR", tracking_url: "https://www.correoargentino.com.ar/formularios/e-commerce?id=OP123456789AR", logistic_type: "drop_off", mode: "me1", shipping_method: null, receiver: { city: "Rosario", state: "Santa Fe", zip_code: "S2000" }, items: [{ id: "MLA987654321", title: "Quesera Plástico", quantity: 2 }], last_updated: "2026-10-04T08:00:00" },
+  { id: 43120094551, channel: "ml", external_id: "43120094551", order_id: "2000003508420115", status: "delivered", substatus: null, tracking_number: "ML998877665AR", tracking_url: null, logistic_type: "fulfillment", mode: "me2", shipping_method: null, receiver: { city: "Córdoba", state: "Córdoba", zip_code: "X5000" }, items: [{ id: "MLA556677889", title: "Promo Caja Perfume Mujer", quantity: 1 }], last_updated: "2026-10-03T17:42:00" },
+  { id: 43990010233, channel: "ml", external_id: "43990010233", order_id: "2000003508421220", status: "handling", substatus: "in_packing_list", tracking_number: null, tracking_url: null, logistic_type: "self_service", mode: "me2", shipping_method: null, receiver: { city: "Quilmes", state: "Buenos Aires", zip_code: "B1878" }, items: [{ id: "MLA111222333", title: "Promo Set Asado Completo", quantity: 1 }, { id: "MLA111222999", title: "Paño Decoración Estampado", quantity: 1 }], last_updated: "2026-10-04T09:20:00" },
+  { id: 44001299877, channel: "ml", external_id: "44001299877", order_id: "2000003508422331", status: "pending", substatus: null, tracking_number: null, tracking_url: null, logistic_type: "cross_docking", mode: "me2", shipping_method: null, receiver: { city: "Mendoza", state: "Mendoza", zip_code: "M5500" }, items: [{ id: "MLA444555666", title: "Promo Mate Día del Padre", quantity: 3 }], last_updated: "2026-10-04T07:05:00" },
+  { id: 42887654120, channel: "ml", external_id: "42887654120", order_id: "2000003508423442", status: "not_delivered", substatus: "delivery_failed", tracking_number: "OP334455112AR", tracking_url: "https://www.correoargentino.com.ar/formularios/e-commerce?id=OP334455112AR", logistic_type: "drop_off", mode: "me1", shipping_method: null, receiver: { city: "San Miguel de Tucumán", state: "Tucumán", zip_code: "T4000" }, items: [{ id: "MLA777888999", title: "Promo Taza + Perfume", quantity: 1 }], last_updated: "2026-10-03T14:10:00" },
+  { id: 43550998741, channel: "ml", external_id: "43550998741", order_id: "2000003508424553", status: "delivered", substatus: null, tracking_number: "ML221100443AR", tracking_url: null, logistic_type: "fulfillment", mode: "me2", shipping_method: null, receiver: { city: "Mar del Plata", state: "Buenos Aires", zip_code: "B7600" }, items: [{ id: "MLA222333444", title: "Promo Bolsa Madera Natural", quantity: 1 }], last_updated: "2026-10-02T19:55:00" },
+  { id: 44120557001, channel: "ml", external_id: "44120557001", order_id: "2000003508425664", status: "ready_to_ship", substatus: "printed", tracking_number: "ML556677889AR", tracking_url: null, logistic_type: "cross_docking", mode: "me2", shipping_method: null, receiver: { city: "La Plata", state: "Buenos Aires", zip_code: "B1900" }, items: [{ id: "MLA888999000", title: "Set Vaso + Perfume", quantity: 2 }], last_updated: "2026-10-04T06:40:00" },
+  { id: 44130002210, channel: "ml", external_id: "44130002210", order_id: "2000003508426101", status: "cancelled", substatus: null, tracking_number: null, tracking_url: null, logistic_type: "self_service", mode: "me2", shipping_method: null, receiver: { city: "Caballito", state: "CABA", zip_code: "C1405" }, items: [{ id: "MLA123450000", title: "Quesera Plástico", quantity: 1 }], last_updated: "2026-10-02T11:12:00" },
+  // Tienda Nube — el identificador visible es el nº de orden; sin subestado
+  { id: 9010482, channel: "tn", external_id: "10482", order_id: "10482", status: "pending", substatus: null, tracking_number: null, tracking_url: null, logistic_type: "", mode: "", shipping_method: "Andreani a domicilio", receiver: { city: "Neuquén", state: "Neuquén", zip_code: "Q8300" }, items: [{ id: "TN-PSA-007", title: "Promo Set Asado Completo", quantity: 1 }], last_updated: "2026-10-04T11:02:00" },
+  { id: 9010481, channel: "tn", external_id: "10481", order_id: "10481", status: "handling", substatus: null, tracking_number: null, tracking_url: null, logistic_type: "", mode: "", shipping_method: "Correo Argentino a sucursal", receiver: { city: "Salta", state: "Salta", zip_code: "A4400" }, items: [{ id: "TN-PTC-006", title: "Set Tabla Gourmet", quantity: 2 }], last_updated: "2026-10-04T09:48:00" },
+  { id: 9010479, channel: "tn", external_id: "10479", order_id: "10479", status: "shipped", substatus: null, tracking_number: "360002184793", tracking_url: "https://www.andreani.com/#!/informacionEnvio/360002184793", logistic_type: "", mode: "", shipping_method: "Andreani a domicilio", receiver: { city: "Bahía Blanca", state: "Buenos Aires", zip_code: "B8000" }, items: [{ id: "TN-PCP-008", title: "Promo Caja Perfume Mujer", quantity: 1 }], last_updated: "2026-10-03T16:30:00" },
+  { id: 9010476, channel: "tn", external_id: "10476", order_id: "10476", status: "delivered", substatus: null, tracking_number: "CP512334908AR", tracking_url: "https://www.correoargentino.com.ar/formularios/e-commerce?id=CP512334908AR", logistic_type: "", mode: "", shipping_method: "Correo Argentino a domicilio", receiver: { city: "Santa Fe", state: "Santa Fe", zip_code: "S3000" }, items: [{ id: "TN-PD-002", title: "Paño Decoración Estampado", quantity: 3 }], last_updated: "2026-10-02T13:05:00" },
+  { id: 9010474, channel: "tn", external_id: "10474", order_id: "10474", status: "shipped", substatus: null, tracking_number: null, tracking_url: null, logistic_type: "", mode: "", shipping_method: "Moto mensajería (CABA)", receiver: { city: "Belgrano", state: "CABA", zip_code: "C1428" }, items: [{ id: "TN-QP-001", title: "Quesera Plástico", quantity: 1 }], last_updated: "2026-10-04T10:15:00" },
+  { id: 9010471, channel: "tn", external_id: "10471", order_id: "10471", status: "not_delivered", substatus: null, tracking_number: "360002177120", tracking_url: "https://www.andreani.com/#!/informacionEnvio/360002177120", logistic_type: "", mode: "", shipping_method: "Andreani a sucursal", receiver: { city: "Posadas", state: "Misiones", zip_code: "N3300" }, items: [{ id: "TN-PM-004", title: "Promo Mate Día del Padre", quantity: 1 }], last_updated: "2026-10-01T18:40:00" },
+  { id: 9010468, channel: "tn", external_id: "10468", order_id: "10468", status: "cancelled", substatus: null, tracking_number: null, tracking_url: null, logistic_type: "", mode: "", shipping_method: "Retiro en local", receiver: { city: "Lanús", state: "Buenos Aires", zip_code: "B1824" }, items: [{ id: "TN-PV-003", title: "Set Vaso + Perfume", quantity: 1 }], last_updated: "2026-10-01T10:20:00" },
 ];
 
 function ShipStatusChip({ status }: { status: ShipStatus }) {
@@ -3683,6 +3693,7 @@ const channelsApi = {
     await new Promise(res => setTimeout(res, 1200));
     const s = SHIPMENTS.find(x => x.external_id === external_id);
     if (!s) throw new Error("Envío no encontrado.");
+    if (s.channel !== "ml") throw new Error("Las etiquetas solo están disponibles para MercadoLibre.");
     if (s.logistic_type === "fulfillment") throw new Error("No disponible para envíos Full.");
     if (s.status === "delivered") throw new Error("La etiqueta ya no está disponible (envío entregado).");
     if (s.status !== "ready_to_ship" && s.status !== "shipped") throw new Error("MercadoLibre todavía no generó la etiqueta — volvé a intentar en unos minutos.");
@@ -3729,73 +3740,135 @@ function LabelButton({ s, busy, onDownload }: { s: Shipment; busy: boolean; onDo
   );
 }
 
-// ── Design A — Operations table ──
-function ShipmentTable({ rows, busyId, onDownload }: { rows: Shipment[]; busyId: string | null; onDownload: (s: Shipment) => void }) {
-  const cols = ["Envío", "Estado", "Destino", "Producto", "Logística", "Tracking", "Actualizado", "Acciones"];
+// Estados agrupados para el filtro (y para las métricas).
+type ShipGroup = "to_prepare" | "in_transit" | "delivered" | "not_delivered" | "cancelled";
+const SHIP_GROUPS: Record<ShipGroup, { label: string; statuses: ShipStatus[] }> = {
+  to_prepare:    { label: "Por preparar", statuses: ["pending", "handling"] },
+  in_transit:    { label: "En camino",    statuses: ["ready_to_ship", "shipped"] },
+  delivered:     { label: "Entregado",    statuses: ["delivered"] },
+  not_delivered: { label: "No entregado", statuses: ["not_delivered"] },
+  cancelled:     { label: "Cancelado",    statuses: ["cancelled"] },
+};
+
+// Mock de API: GET /api/shipments?channel&status_group&q&page&page_size
+const shipmentsApi = {
+  async list(p: { channel: SalesChannelKey | "all"; group: ShipGroup | "all"; q: string }) {
+    await wait(450);
+    const byChannel = SHIPMENTS.filter(s => (p.channel === "all" || s.channel === p.channel) && shipMatches(s, p.q));
+    const rows = p.group === "all" ? byChannel : byChannel.filter(s => SHIP_GROUPS[p.group as ShipGroup].statuses.includes(s.status));
+    return { rows: [...rows].sort((a, b) => b.last_updated.localeCompare(a.last_updated)), statsBase: byChannel, account_total: SHIPMENTS.length };
+  },
+};
+
+function TrackingAction({ s }: { s: Shipment }) {
+  if (!s.tracking_url) return <span style={{ color: "#CBD5E1" }}>—</span>;
   return (
-    <div className="flex-1 overflow-auto bg-white min-h-0">
-      <table className="w-full text-xs border-collapse" style={{ minWidth: "980px" }}>
-        <thead style={{ position: "sticky", top: 0, zIndex: 10 }}>
-          <tr className="bg-white" style={{ borderBottom: "1px solid #F1F5F9" }}>
-            {cols.map(c => (
-              <th key={c} className="px-3 py-3 font-semibold text-left" style={{ color: "#94A3B8", fontSize: "10px", letterSpacing: "0.07em" }}>{c.toUpperCase()}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(s => {
-            const first = s.items[0];
-            const extra = s.items.reduce((a, i) => a + i.quantity, 0) - first.quantity;
-            return (
-              <tr key={s.id} className="transition-colors hover:bg-slate-50" style={{ borderBottom: "1px solid #F8FAFC" }}>
-                <td className="px-3 py-3">
-                  <div className="font-semibold tabular-nums" style={{ color: "#0A1628" }}>{s.external_id}</div>
-                  <div style={{ fontSize: "10px", color: "#94A3B8" }}>Orden #{s.order_id}</div>
-                </td>
-                <td className="px-3 py-3">
-                  <ShipStatusChip status={s.status} />
-                  {subLabel(s.substatus) && <div style={{ fontSize: "10px", color: "#94A3B8", marginLeft: 28, marginTop: 2 }}>{subLabel(s.substatus)}</div>}
-                </td>
-                <td className="px-3 py-3">
-                  <div style={{ color: "#334155" }}>{s.receiver.city}, {s.receiver.state}</div>
-                  <div className="tabular-nums" style={{ fontSize: "10px", color: "#94A3B8" }}>{s.receiver.zip_code}</div>
-                </td>
-                <td className="px-3 py-3">
-                  <div className="truncate" style={{ color: "#334155", maxWidth: 200 }}>{first.title}</div>
-                  <div style={{ fontSize: "10px", color: "#94A3B8" }}>{first.quantity} u.{extra > 0 ? ` · +${extra}` : ""}</div>
-                </td>
-                <td className="px-3 py-3"><LogisticTags mode={s.mode} logistic_type={s.logistic_type} /></td>
-                <td className="px-3 py-3">
-                  {s.tracking_number
-                    ? <span className="font-mono tabular-nums" style={{ color: "#4F46E5" }}>{s.tracking_number}</span>
-                    : <span style={{ color: "#CBD5E1" }}>—</span>}
-                </td>
-                <td className="px-3 py-3 tabular-nums" style={{ color: "#64748B" }}>{fmtShipDate(s.last_updated)}</td>
-                <td className="px-3 py-3"><LabelButton s={s} busy={busyId === s.external_id} onDownload={() => onDownload(s)} /></td>
-              </tr>
-            );
-          })}
-          {rows.length === 0 && <tr><td colSpan={cols.length} className="px-4 py-16 text-center" style={{ color: "#94A3B8" }}>No hay envíos que coincidan con la búsqueda o los filtros.</td></tr>}
-        </tbody>
-      </table>
-    </div>
+    <a href={s.tracking_url} target="_blank" rel="noopener noreferrer"
+      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold whitespace-nowrap transition-colors hover:bg-indigo-50"
+      style={{ color: "#4F46E5", background: "white", border: "1px solid #C7D2FE" }}>
+      Ver tracking
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3h4v4M13 3 7 9M11 9.5V13H3V5h3.5" /></svg>
+    </a>
   );
 }
 
-function ShipmentsML() {
+function ShipmentTable({ rows, busyId, onDownload, loading }: { rows: Shipment[]; busyId: string | null; onDownload: (s: Shipment) => void; loading: boolean }) {
+  const cols = ["Envío", "Estado", "Destino", "Producto", "Método", "Tracking", "Actualizado", "Acciones"];
+  return (
+    <table className="w-full text-xs" style={{ minWidth: "1000px", borderCollapse: "separate", borderSpacing: 0 }}>
+      <thead>
+        <tr>
+          {cols.map(c => (
+            <th key={c} className="sticky top-0 bg-white px-3 py-3 font-semibold text-left" style={{ zIndex: 10, color: "#94A3B8", fontSize: "10px", letterSpacing: "0.07em", boxShadow: "inset 0 -1px 0 #F1F5F9" }}>{c.toUpperCase()}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {loading ? Array.from({ length: 8 }, (_, i) => (
+          <tr key={i}>
+            {cols.map((c, k) => (
+              <td key={c} className="px-3 py-3.5" style={{ borderBottom: "1px solid #F8FAFC" }}>
+                <span className="block h-3 rounded animate-pulse" style={{ background: "#F1F5F9", width: [96, 110, 90, 140, 100, 90, 80, 64][k] }} />
+              </td>
+            ))}
+          </tr>
+        )) : rows.map(s => {
+          const first = s.items[0];
+          const extra = s.items.reduce((a, i) => a + i.quantity, 0) - first.quantity;
+          const td = "px-3 py-3 align-top";
+          const b = { borderBottom: "1px solid #F8FAFC" };
+          return (
+            <tr key={s.id} className="transition-colors hover:bg-slate-50">
+              <td className={td} style={b}>
+                <div className="flex flex-col gap-1 items-start">
+                  <div>
+                    <div className="font-semibold tabular-nums" style={{ color: "#0A1628" }}>{s.channel === "ml" ? s.external_id : `#${s.order_id}`}</div>
+                    {s.channel === "ml" && <div className="tabular-nums" style={{ fontSize: "10px", color: "#94A3B8" }}>Orden #{s.order_id}</div>}
+                  </div>
+                  <ChannelBadge channel={s.channel} />
+                </div>
+              </td>
+              <td className={td} style={b}>
+                <ShipStatusChip status={s.status} />
+                {s.channel === "ml" && subLabel(s.substatus) && <div style={{ fontSize: "10px", color: "#94A3B8", marginLeft: 28, marginTop: 2 }}>{subLabel(s.substatus)}</div>}
+              </td>
+              <td className={td} style={b}>
+                <div style={{ color: "#334155" }}>{s.receiver.city}, {s.receiver.state}</div>
+                <div className="tabular-nums" style={{ fontSize: "10px", color: "#94A3B8" }}>CP {s.receiver.zip_code}</div>
+              </td>
+              <td className={td} style={b}>
+                <div className="truncate" style={{ color: "#334155", maxWidth: 200 }}>{first.title}</div>
+                <div style={{ fontSize: "10px", color: "#94A3B8" }}>{first.quantity} u.{extra > 0 ? ` · +${extra} más` : ""}</div>
+              </td>
+              <td className={td} style={b}>
+                {s.channel === "ml"
+                  ? <LogisticTags mode={s.mode} logistic_type={s.logistic_type} />
+                  : <span style={{ color: "#334155" }}>{s.shipping_method ?? "—"}</span>}
+              </td>
+              <td className={td} style={b}>
+                {!s.tracking_number ? <span style={{ color: "#CBD5E1" }}>—</span>
+                  : s.tracking_url
+                    ? <a href={s.tracking_url} target="_blank" rel="noopener noreferrer" className="font-mono tabular-nums hover:underline inline-flex items-center gap-1" style={{ color: "#4F46E5" }}>{s.tracking_number}<span aria-hidden>↗</span></a>
+                    : <span className="font-mono tabular-nums" style={{ color: "#334155" }}>{s.tracking_number}</span>}
+              </td>
+              <td className={`${td} tabular-nums whitespace-nowrap`} style={{ ...b, color: "#64748B" }}>{fmtShipDate(s.last_updated)}</td>
+              <td className={td} style={b}>
+                {s.channel === "ml" ? <LabelButton s={s} busy={busyId === s.external_id} onDownload={() => onDownload(s)} /> : <TrackingAction s={s} />}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function Shipments() {
   const [search, setSearch] = useState("");
+  const [channel, setChannel] = useState<SalesChannelKey | "all">("all");
+  const [group, setGroup] = useState<ShipGroup | "all">("all");
   const [pageSize, setPageSize] = useState(50);
   const [page, setPage] = useState(0);
-  const [status, setStatus] = useState<ShipStatus | "all">("all");
-  const [logistic, setLogistic] = useState<string>("all");
-  // Métricas sobre la búsqueda; la tabla además aplica los filtros.
-  const searched = SHIPMENTS.filter(s => shipMatches(s, search));
-  const rows = searched.filter(s => (status === "all" || s.status === status) && (logistic === "all" || logLabel(s.logistic_type) === logistic));
-  const filterCount = (status !== "all" ? 1 : 0) + (logistic !== "all" ? 1 : 0);
-  const logisticOptions = [...new Set(SHIPMENTS.map(s => logLabel(s.logistic_type)))];
+  const [data, setData] = useState<Awaited<ReturnType<typeof shipmentsApi.list>> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ tone: "ok" | "err"; message: string } | null>(null);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 5000); return () => clearTimeout(t); }, [toast]);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError(null);
+    const t = setTimeout(() => {
+      shipmentsApi.list({ channel, group, q: search })
+        .then(r => { if (alive) setData(r); })
+        .catch(e => { if (alive) setError(e instanceof Error ? e.message : "No pudimos cargar los envíos."); })
+        .finally(() => { if (alive) setLoading(false); });
+    }, search ? 250 : 0);
+    return () => { alive = false; clearTimeout(t); };
+  }, [search, channel, group, reload]);
+  useEffect(() => { setPage(0); }, [search, channel, group, pageSize]);
 
   const downloadLabel = async (s: Shipment) => {
     if (busyId) return;
@@ -3813,19 +3886,18 @@ function ShipmentsML() {
     } finally { setBusyId(null); }
   };
 
-  // Reiniciar a la primera página cuando cambia la búsqueda o el tamaño de página
-  useEffect(() => { setPage(0); }, [search, pageSize, status, logistic]);
-
+  const rows = data?.rows ?? [];
   const total = rows.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const clampedPage = Math.min(page, pageCount - 1);
   const start = clampedPage * pageSize;
   const pageRows = rows.slice(start, start + pageSize);
-  const rangeStart = total === 0 ? 0 : start + 1;
-  const rangeEnd = Math.min(start + pageSize, total);
+  const filterCount = (channel !== "all" ? 1 : 0) + (group !== "all" ? 1 : 0);
+  const clear = () => { setChannel("all"); setGroup("all"); };
+  const accountEmpty = data?.account_total === 0;
 
   return (
-    <div className="flex flex-col flex-1 min-w-0 relative">
+    <div className="flex flex-col flex-1 min-w-0 min-h-0 relative">
       {toast && (
         <div role="status" className="fixed bottom-6 right-6 flex items-start gap-2.5 rounded-xl px-4 py-3 max-w-sm"
           style={{ zIndex: 60, background: "white", border: `1px solid ${toast.tone === "ok" ? "#BBF7D0" : "#FECACA"}`, boxShadow: "0 12px 32px rgba(10,22,40,0.12)" }}>
@@ -3846,7 +3918,7 @@ function ShipmentsML() {
           <span className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#CBD5E1" }}>
             <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.4" /><path d="M9.5 9.5L12 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
           </span>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por envío, orden, tracking, ciudad o producto…"
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nº de envío, nº de orden, tracking, ciudad o producto…"
             className="w-full pl-9 pr-4 py-2 rounded-xl text-sm outline-none transition-all"
             style={{ background: "#F8FAFC", border: "1.5px solid #E2E8F0", color: "#0A1628" }}
             onFocus={e => { e.target.style.borderColor = "#4F46E5"; e.target.style.boxShadow = "0 0 0 3px rgba(79,70,229,0.08)"; }}
@@ -3855,10 +3927,10 @@ function ShipmentsML() {
       </header>
 
       <div className="flex-1 overflow-hidden flex flex-col p-5 min-h-0 gap-3">
-        <div className="flex items-center justify-between gap-3 flex-shrink-0">
+        <div className="flex items-center justify-between gap-3 flex-shrink-0 flex-wrap">
           <div className="flex items-baseline gap-2.5">
-            <h1 className="text-base font-bold" style={{ color: "#0A1628" }}>Envíos · MercadoLibre</h1>
-            <span className="text-xs font-medium" style={{ color: "#94A3B8" }}>{rows.length} {rows.length === 1 ? "envío" : "envíos"}</span>
+            <h1 className="text-base font-bold" style={{ color: "#0A1628" }}>Envíos</h1>
+            <span className="text-xs font-medium" style={{ color: "#94A3B8" }}>{data ? `${total} ${total === 1 ? "envío" : "envíos"}` : "—"}</span>
           </div>
           <Popover width={280} trigger={o => (
             <button className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium transition-colors"
@@ -3872,39 +3944,68 @@ function ShipmentsML() {
               <div className="flex flex-col gap-3 p-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold" style={{ color: "#0A1628" }}>Filtros</span>
-                  {filterCount > 0 && <button onClick={() => { setStatus("all"); setLogistic("all"); }} className="text-xs font-medium hover:underline" style={{ color: "#4F46E5" }}>Limpiar</button>}
+                  {filterCount > 0 && <button onClick={clear} className="text-xs font-medium hover:underline" style={{ color: "#4F46E5" }}>Limpiar</button>}
                 </div>
-                <FilterField label="Estado" value={status} onChange={v => setStatus(v as ShipStatus | "all")}
-                  options={[{ value: "all", label: "Todos" }, ...(Object.keys(SHIP_STATUS) as ShipStatus[]).map(k => ({ value: k, label: SHIP_STATUS[k].label }))]} />
-                <FilterField label="Tipo logístico" value={logistic} onChange={setLogistic}
-                  options={[{ value: "all", label: "Todos" }, ...logisticOptions.map(l => ({ value: l, label: l }))]} />
+                <FilterField label="Canal" value={channel} onChange={v => setChannel(v as SalesChannelKey | "all")}
+                  options={[{ value: "all", label: "Todos" }, { value: "ml", label: "MercadoLibre" }, { value: "tn", label: "Tienda Nube" }]} />
+                <FilterField label="Estado" value={group} onChange={v => setGroup(v as ShipGroup | "all")}
+                  options={[{ value: "all", label: "Todos" }, ...(Object.keys(SHIP_GROUPS) as ShipGroup[]).map(k => ({ value: k, label: SHIP_GROUPS[k].label }))]} />
               </div>
             )}
           </Popover>
         </div>
 
-        <StatStrip stats={shipStats(searched)} />
+        <div className="overflow-x-auto flex-shrink-0"><div className="min-w-[720px]"><StatStrip stats={data ? shipStats(data.statsBase) : shipStats([]).map(s => ({ ...s, value: "—" }))} /></div></div>
 
         <div className="flex-1 flex flex-col min-h-0 rounded-2xl bg-white overflow-hidden" style={{ border: "1px solid #E2E8F0" }}>
-          <ShipmentTable rows={pageRows} busyId={busyId} onDownload={downloadLabel} />
+          <div className="flex-1 overflow-auto bg-white min-h-0">
+            {error ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center px-6">
+                <span className="w-11 h-11 rounded-2xl flex items-center justify-center mb-1" style={{ background: "#FEE2E2", color: "#DC2626" }}>{SHIP_STATUS.not_delivered.icon}</span>
+                <p className="text-sm font-semibold" style={{ color: "#0A1628" }}>No pudimos cargar los envíos</p>
+                <p className="text-xs max-w-sm" style={{ color: "#64748B" }}>{error}</p>
+                <button onClick={() => setReload(n => n + 1)} className="mt-1 px-3 py-1.5 rounded-xl text-xs font-semibold hover:bg-slate-50" style={{ border: "1px solid #E2E8F0", color: "#4F46E5" }}>Reintentar</button>
+              </div>
+            ) : accountEmpty && !loading ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center px-6">
+                <svg width="120" height="84" viewBox="0 0 120 84" fill="none" aria-hidden>
+                  <ellipse cx="60" cy="76" rx="44" ry="5" fill="#F1F5F9" />
+                  <rect x="18" y="26" width="52" height="38" rx="4" fill="#EEF2FF" stroke="#C7D2FE" strokeWidth="1.5" />
+                  <path d="M70 36h16l12 13v15H70z" fill="white" stroke="#C7D2FE" strokeWidth="1.5" strokeLinejoin="round" />
+                  <path d="M76 40h8l7 8H76z" fill="#EEF2FF" />
+                  <circle cx="34" cy="66" r="7" fill="white" stroke="#4F46E5" strokeWidth="2" />
+                  <circle cx="84" cy="66" r="7" fill="white" stroke="#4F46E5" strokeWidth="2" />
+                  <path d="M30 40h22M30 48h14" stroke="#A5B4FC" strokeWidth="2" strokeLinecap="round" />
+                  <path d="M6 34h8M2 44h10M8 54h6" stroke="#E2E8F0" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <p className="text-sm font-semibold mt-1" style={{ color: "#0A1628" }}>Todavía no hay envíos</p>
+                <p className="text-xs max-w-sm" style={{ color: "#64748B" }}>Cuando vendas por MercadoLibre o Tienda Nube, los envíos van a aparecer acá para que los sigas y descargues etiquetas.</p>
+              </div>
+            ) : !loading && total === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center px-6">
+                <p className="text-sm" style={{ color: "#94A3B8" }}>No hay envíos que coincidan con la búsqueda o los filtros.</p>
+                {filterCount > 0 && <button onClick={clear} className="text-xs font-semibold hover:underline" style={{ color: "#4F46E5" }}>Limpiar filtros</button>}
+              </div>
+            ) : (
+              <ShipmentTable rows={pageRows} busyId={busyId} onDownload={downloadLabel} loading={loading} />
+            )}
+          </div>
           <div className="flex items-center justify-between px-6 py-3 flex-shrink-0 bg-white" style={{ borderTop: "1px solid #E2E8F0" }}>
             <span className="text-xs" style={{ color: "#94A3B8" }}>{total} {total === 1 ? "envío" : "envíos"}</span>
             <div className="flex items-center gap-3">
-              <span className="text-xs" style={{ color: "#94A3B8" }}>Mostrar</span>
-              <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))} className="text-xs px-2 py-1 rounded-lg outline-none" style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", color: "#475569" }}>
+              <span className="hidden sm:inline text-xs" style={{ color: "#94A3B8" }}>Mostrar</span>
+              <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))} className="hidden sm:block text-xs px-2 py-1 rounded-lg outline-none" style={{ background: "#F8FAFC", border: "1px solid #E2E8F0", color: "#475569" }}>
                 <option>50</option><option>100</option><option>200</option>
               </select>
-              <span className="text-xs font-medium" style={{ color: "#475569" }}>{rangeStart} – {rangeEnd}</span>
-              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={clampedPage === 0}
-                className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors text-sm"
-                style={{ color: "#94A3B8", border: "1px solid #E2E8F0", cursor: clampedPage === 0 ? "default" : "pointer", opacity: clampedPage === 0 ? 0.4 : 1 }}
-                onMouseEnter={e => { if (clampedPage !== 0) e.currentTarget.style.background = "#F1F5F9"; }}
-                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>‹</button>
-              <button onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))} disabled={clampedPage >= pageCount - 1}
-                className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors text-sm"
-                style={{ color: "#94A3B8", border: "1px solid #E2E8F0", cursor: clampedPage >= pageCount - 1 ? "default" : "pointer", opacity: clampedPage >= pageCount - 1 ? 0.4 : 1 }}
-                onMouseEnter={e => { if (clampedPage < pageCount - 1) e.currentTarget.style.background = "#F1F5F9"; }}
-                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>›</button>
+              <span className="text-xs font-medium" style={{ color: "#475569" }}>{total ? start + 1 : 0} – {Math.min(start + pageSize, total)}</span>
+              {(["‹", "›"] as const).map(g => {
+                const dis = g === "‹" ? clampedPage === 0 : clampedPage >= pageCount - 1;
+                return <button key={g} disabled={dis} onClick={() => setPage(clampedPage + (g === "‹" ? -1 : 1))} aria-label={g === "‹" ? "Página anterior" : "Página siguiente"}
+                  className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors text-sm"
+                  style={{ color: "#94A3B8", border: "1px solid #E2E8F0", cursor: dis ? "default" : "pointer", opacity: dis ? 0.4 : 1 }}
+                  onMouseEnter={e => { if (!dis) e.currentTarget.style.background = "#F1F5F9"; }}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>{g}</button>;
+              })}
             </div>
           </div>
         </div>
@@ -4181,9 +4282,14 @@ const fmtSaleDate = (iso: string) => {
   return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
+// Chip de canal con los colores oficiales de cada marca.
+const CHANNEL_BRAND: Record<SalesChannelKey, { solid: string; ink: string }> = {
+  ml: { solid: "#FFE600", ink: "#2D3277" },
+  tn: { solid: "#2C3357", ink: "#FFFFFF" },
+};
 function ChannelBadge({ channel }: { channel: SalesChannelKey }) {
-  const c = SALES_CHANNELS[channel];
-  return <span className="inline-flex items-center rounded-full px-2 py-0.5 whitespace-nowrap" style={{ fontSize: "10px", fontWeight: 700, color: c.text, background: c.bg, border: `1px solid ${c.border}` }}>{c.name}</span>;
+  const b = CHANNEL_BRAND[channel];
+  return <span className="inline-flex items-center rounded-md px-1.5 py-0.5 whitespace-nowrap" style={{ fontSize: "10px", fontWeight: 700, color: b.ink, background: b.solid, letterSpacing: "0.01em" }}>{SALES_CHANNELS[channel].name}</span>;
 }
 function OrderStatusBadge({ status }: { status: OrderStatus }) {
   const m = ORDER_STATUS[status];
@@ -4860,12 +4966,8 @@ function Dashboard() {
         </div>
       ) : active === "Ventas" ? (
         <Ventas />
-      ) : active === "Envios" ? (
-        <div className="flex flex-col flex-1 min-w-0"><ComingSoon title="Envios" icon="envios" /></div>
-      ) : active === "Envios MercadoLibre" ? (
-        <ShipmentsML />
-      ) : active === "Envios Tienda Nube" ? (
-        <div className="flex flex-col flex-1 min-w-0"><ComingSoon title="Envios · Tienda Nube" icon="tn" /></div>
+      ) : active === "Envíos" ? (
+        <Shipments />
       ) : active === "Competencia" ? (
         <div className="flex flex-col flex-1 min-w-0"><ComingSoon title="Competencia" icon="competencia" /></div>
       ) : active === "Prompts AI" ? (

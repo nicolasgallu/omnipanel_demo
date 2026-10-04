@@ -18,6 +18,13 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
   `./run-native.sh` = sin docker. La DB la elige `DB_HOST` en `backend/.env`
   (seteado → MySQL local; vacío → connector Cloud SQL). Re-seed:
   `docker compose down -v && ./run.sh`. Regenerar el dump: `backend/scripts/export_seed.sh`.
+  Validar que el esquema local y Cloud SQL coincidan: `backend/scripts/check_schema_sync.py`
+  (compara tablas/columnas/índices/FKs/vistas/triggers vía information_schema;
+  exit 0 = idénticos o solo diferencias cosméticas, `--strict` las falla, `--json` para CI).
+  Subir las órdenes FAKE-* (y el producto TEST) del MySQL local a Cloud SQL:
+  `backend/scripts/push_fake_orders_to_cloud.py` (`--dry-run` para previsualizar,
+  `--cleanup` para borrarlas de Cloud SQL; remapea cuentas por
+  (platform, external_account_id) — no confía en que los ids coincidan).
 - Webhooks (no tocar su contrato):
   - `backend/app/webhook/meli_dispatcher.py` → `/webhooks/meli` (una URL para todos los topics de Meli: inbox en `events` + ruteo por `topic` vía `registry.py`). El inbox SIEMPRE queda inline (antes del 200); los handlers pesados del registry se encolan vía `backend/app/tasks.py` (Cloud Tasks en prod, stub en memoria en dev/tests). `orders_v2` y `items` siguen inline.
   - `backend/app/webhook/task_worker.py` → `/internal/tasks/webhook` (worker de Cloud Tasks: OIDC en prod, corre el handler del topic; 200 ok / 500 reintento). Guía de setup: `backend/docs/cloud_tasks_setup.md`.
@@ -88,6 +95,55 @@ de verdad; acá solo viven reglas estables, punteros y pendientes.
   WhatsApp real en tests (stub de `enviar_mensaje_whapi`). Todo verde (29/09/2026).
 
 ## Pendientes conocidos
+
+- **IMPLEMENTADO 04/10 — Panel unificado de Envíos (backend + front, contrato
+  FINAL del Figma)**: tabla `tiendanube.shipments` (1:1 con la orden, key
+  `(account_id, order_id)`; `status` = estado POR FILA del enumerado único
+  `pending|handling|ready_to_ship|shipped|delivered|not_delivered|cancelled`
+  — TN mapea su `shipping_status` al guardar: unpacked→pending,
+  unshipped/partially_packed→handling, shipped/partially_fulfilled→shipped,
+  delivered→delivered, cancelada→cancelled; `data` = contexto de envío
+  completo incl. `fulfillments` con `tracking_info.url`).
+  `record_tn_shipment` se llama desde `record_order` (rama TN);
+  `fetch_order` pide `?aggregates=fulfillment_orders` con fallback ante 4xx.
+  API `GET /api/shipments` (`app/api/shipments.py`): UNION ML+TN, filtros
+  `channel` + `status_group` (grupos to_prepare/in_transit/delivered/
+  not_delivered/cancelled calculados por CASE) + `q`, page 0-based,
+  `counts{total,to_prepare,in_transit,delivered,incidents}` (sin filtro de
+  grupo) + `account_total` (estado vacío). Fila: `external_id` (ML: envío,
+  TN: orden), `status` por fila, `substatus`/`logistic_type`/`mode` (ML),
+  `shipping_method`/`tracking_url` (TN), `receiver`, `items[{id,title,
+  quantity}]`. Backfill: `scripts/backfill.py tn-shipments` (y el push de
+  FAKE-* a Cloud copia/limpia shipments). FRONT (port del Figma): página
+  única `/envios` en `pages/ShipmentsPage.tsx` (buscador 250ms, filtros
+  Canal/Estado, strip 5 métricas, acciones condicionales ML=Etiqueta /
+  TN=Ver tracking, skeletons/error/vacío/sin-resultados, paginación), nav
+  sin submenú Envios (rutas viejas redirigen), `components/ChannelBadge.tsx`
+  compartido (colores de marca sólidos, sin borde) usado también en Ventas
+  (tabla + drawer vía salesShared), `shipmentsApi.list` + types + test de
+  contrato + mock de dev actualizados; se eliminó `channelsApi.mlShipments`.
+  Tests: backend 360 passed/5 skipped; front 33 passed + typecheck.
+  GCP HECHO (04/10): tabla creada en Cloud SQL + 17 envíos migrados desde
+  `tiendanube.orders` (`scripts/seed_tn_shipments_from_orders.py`,
+  idempotente) + API verificada contra Cloud SQL real (scoping por business
+  OK: las 9 filas de la cuenta TN de Emiliano/business 231 quedan fuera del
+  panel de business 1). El backfill real (`backfill.py tn-shipments`) trajo 0
+  órdenes porque la tienda reconectada (8182050) NO tiene órdenes en la API
+  (las históricas 20xxxxxx eran de la encarnación anterior de la tienda);
+  cuando entren órdenes nuevas, el webhook llena `tiendanube.shipments` solo.
+  Spec: `backend/docs/shipments_panel_plan.md` (§12 contrato final, §13 GCP).
+  NOTA: `check_schema_sync.py` es MySQL-8-only (usa `IS_VISIBLE` de
+  information_schema): contra un MySQL local MariaDB falla; con el docker
+  mysql:8.4 oficial no aplica.
+  NOTA seed: `backend/seed_data.sql` traía 2 bugs pre-existentes del dump
+  (INSERT de `mercadolibre.attributes` con un valor de más de la columna
+  dropeada `category_options`; credentials TN con access_token NULL) — el
+  primero se corrigió en el dump; el segundo es estado real de Cloud SQL
+  (los tests de acciones TN necesitan token localmente). También se corrigió
+  el `external_account_id` de la cuenta TN local (estaba `307027338`, el id
+  de ML; el real de Cloud es `8182050`) para que el mapeo local→Cloud de
+  `push_fake_orders_to_cloud.py` funcione (verificado dry-run: 1→1, 2→92);
+  el script ahora copia/limpia/verifica también `tiendanube.shipments`.
 
 - **RESUELTO 02/10 — Shape-mismatch de handlers Meli (auditoría + docs)**: los
   handlers de topics guardaban campos vacíos por leer la respuesta de Meli con

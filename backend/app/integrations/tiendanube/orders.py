@@ -8,6 +8,13 @@ USER_AGENT = "melirevamp-tiendanube/1.0"
 def fetch_order(account, order_id):
     """Fetch one order from Tiendanube and cast its prices/quantities.
 
+    Pide el aggregate oficial `fulfillment_orders` (doc del Order resource:
+    https://tiendanube.github.io/api-documentation/resources/order — devuelve
+    el detalle de los Fulfillment Orders: status, carrier, tracking_info.url,
+    destination), que alimenta `data` de tiendanube.shipments. Si la API
+    rechaza el parámetro (versión vieja o tienda sin fulfillment), reintenta
+    SIN él: el webhook de órdenes no debe caerse por un aggregate opcional.
+
     Raises on any non-2xx (the webhook turns that into a 500 retry).
     """
     token = get_access_token(account["id"]).get("access_token")
@@ -20,10 +27,38 @@ def fetch_order(account, order_id):
         "Content-Type": "application/json",
         "User-Agent": USER_AGENT,
     }
-    response = requests.get(url, headers=headers, timeout=60)
+    response = requests.get(url, headers=headers,
+                            params={"aggregates": "fulfillment_orders"}, timeout=60)
+    if response.status_code >= 400:
+        # Fallback sin aggregates: el envío igual se registra con los campos
+        # planos (shipping_status, shipping_address, tracking, etc.).
+        response = requests.get(url, headers=headers, timeout=60)
     response.raise_for_status()
     order = response.json()
     return _cast_products(order)
+
+
+def fetch_orders_page(account, page=1, per_page=200):
+    """Fetch one page of the store's orders (paginated by `page`).
+
+    Returns a list of orders (already price/quantity-cast). Raises on non-2xx.
+    Doc: https://dev.tiendanube.com/en/docs/erp-guide/orders/management
+    """
+    token = get_access_token(account["id"]).get("access_token")
+    if not token:
+        raise Exception("Missing access token for account " + str(account["id"]))
+    store_id = account["external_account_id"]
+    url = "{0}/{1}/orders".format(BASE_URL, store_id)
+    headers = {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+    }
+    response = requests.get(url, headers=headers,
+                            params={"per_page": per_page, "page": page}, timeout=60)
+    response.raise_for_status()
+    orders = response.json()
+    return [_cast_products(o) for o in orders]
 
 
 def derive_event_type(order, trigger="paid"):

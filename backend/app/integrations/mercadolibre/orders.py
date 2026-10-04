@@ -18,6 +18,31 @@ def fetch_order(account, order_id):
     return response.json()
 
 
+def fetch_orders_page(account, offset=0, limit=50):
+    """Fetch one page of the seller's orders from /orders/search.
+
+    Returns (orders, total). Raises on any non-2xx.
+    Doc: https://global-selling.mercadolibre.com/devsite/en_us/manage-orders-cbt/manage-orders-cbt
+    """
+    token = get_access_token(account["id"]).get("access_token")
+    if not token:
+        raise Exception("Missing access token for account " + str(account["id"]))
+    url = MELI_BASE_URL + "/orders/search"
+    headers = {"Authorization": "Bearer " + token}
+    params = {
+        "seller": str(account["external_account_id"]),
+        "sort": "date_desc",
+        "offset": offset,
+        "limit": limit,
+    }
+    response = requests.get(url, headers=headers, params=params, timeout=30)
+    response.raise_for_status()
+    body = response.json()
+    results = body.get("results") or []
+    total = (body.get("paging") or {}).get("total", 0)
+    return results, total
+
+
 def derive_event_type(order, trigger="paid"):
     """Map the order's REAL status to our claim key.
 

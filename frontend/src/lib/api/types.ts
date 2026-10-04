@@ -543,7 +543,31 @@ export type ListingQuery = {
   page_size?: number
 }
 
-// ─── Envíos de MercadoLibre (mercadolibre.shipments) ─────────────────────────
+// ─── Envíos unificados (GET /api/shipments — contrato FINAL Figma 04/10) ──────
+
+export type ShipmentChannel = 'ml' | 'tn'
+
+// Estado POR FILA (enumerado único ML/TN). TN mapea su shipping_status al
+// guardar (unpacked→pending, unshipped/partially_packed→handling,
+// shipped/partially_fulfilled→shipped, delivered→delivered); ready_to_ship y
+// not_delivered solo los produce ML.
+export type ShipmentRowStatus =
+  | 'pending'
+  | 'handling'
+  | 'ready_to_ship'
+  | 'shipped'
+  | 'delivered'
+  | 'not_delivered'
+  | 'cancelled'
+
+// Grupos para filtro y métricas: to_prepare = pending+handling;
+// in_transit = ready_to_ship+shipped; incidents = not_delivered+cancelled.
+export type ShipmentStatusGroup =
+  | 'to_prepare'
+  | 'in_transit'
+  | 'delivered'
+  | 'not_delivered'
+  | 'cancelled'
 
 export interface ShipmentItem {
   id: string
@@ -558,25 +582,29 @@ export interface ShipmentReceiver {
 }
 
 export interface Shipment {
-  external_id: string
+  id: string // "ml-<external_id>" | "tn-<order_id>"
+  channel: ShipmentChannel
+  external_id: string // ML: nº de envío · TN: nº de orden
   order_id: string | null
-  status: string
-  substatus: string | null
+  status: ShipmentRowStatus
+  substatus: string | null // solo ML
+  logistic_type: string | null // solo ML
+  mode: string | null // solo ML (me1/me2/…)
+  shipping_method: string | null // solo TN (shipping_option)
   tracking_number: string | null
-  logistic_type: string
-  mode: string
+  tracking_url: string | null // TN: fulfillments[].tracking_info.url
   receiver: ShipmentReceiver
   items: ShipmentItem[]
   last_updated: string
 }
 
-// Métricas del strip: con la búsqueda pero SIN los filtros de estado/tipo.
+// Métricas del strip: con channel y q, SIN el filtro de status_group.
 export interface ShipmentCounts {
   total: number
   to_prepare: number
   in_transit: number
   delivered: number
-  incidents: number
+  incidents: number // not_delivered + cancelled
 }
 
 export interface ShipmentsResponse {
@@ -585,6 +613,15 @@ export interface ShipmentsResponse {
   page: number
   page_size: number
   counts: ShipmentCounts
+  account_total: number // envíos de la cuenta sin ningún filtro (estado vacío)
+}
+
+export type ShipmentsQuery = {
+  q?: string
+  channel?: ShipmentChannel | 'all'
+  status_group?: ShipmentStatusGroup | 'all'
+  page?: number
+  page_size?: number
 }
 
 // ─── Credenciales de integración (Configuración) ─────────────────────────────

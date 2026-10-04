@@ -37,10 +37,6 @@ const NAV: NavItem[] = [
     label: 'Envios',
     icon: 'envios',
     path: '/envios',
-    children: [
-      { label: 'MercadoLibre', icon: 'ml', path: '/envios/mercadolibre' },
-      { label: 'Tienda Nube', icon: 'tn', path: '/envios/tiendanube' },
-    ],
   },
   { label: 'Competencia', icon: 'competencia', path: '/competencia' },
   { label: 'Prompts AI', icon: 'prompts', path: '/prompts-ai' },

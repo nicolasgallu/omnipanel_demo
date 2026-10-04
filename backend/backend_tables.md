@@ -9,6 +9,7 @@
 SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS
+    tiendanube.shipments,
     tiendanube.orders,
     tiendanube.categories,
     tiendanube.attributes,
@@ -767,6 +768,46 @@ CREATE TABLE tiendanube.orders (
     UNIQUE KEY uq_order_account (account_id, order_id)
 );
 ```
+
+```sql
+-- Envíos de Tienda Nube (panel unificado de Envíos). TN no tiene un recurso
+-- "shipment" aparte: el envío es la propia orden (1:1), así que la identidad
+-- es (account_id, order_id). `status` guarda el estado NORMALIZADO del panel
+-- (to_prepare|in_transit|delivered|cancelled — not_delivered no existe en TN)
+-- porque el order.status crudo es ambiguo para una vista de envíos; `data`
+-- guarda el contexto de envío completo (shipping_status, shipping_address,
+-- shipping_option, tracking, fulfillments...).
+CREATE TABLE tiendanube.shipments (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    account_id INT NOT NULL,
+    order_id VARCHAR(255) NOT NULL,            -- la orden ES el envío
+    status VARCHAR(50) NULL,                   -- normalizado (ver arriba)
+    data JSON NULL,                            -- contexto de envío de la orden
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_shipments_account_order (account_id, order_id)
+);
+```
+
+> Tabla del panel unificado de Envíos (04/10): se creó `tiendanube.shipments`
+> (espejo de `mercadolibre.shipments` pero 1:1 con la orden). En **Cloud SQL**
+> correr una vez (el `schema.sql` ya la incluye para instancias nuevas):
+>
+> ```sql
+> CREATE TABLE IF NOT EXISTS tiendanube.shipments (
+>     id BIGINT PRIMARY KEY AUTO_INCREMENT,
+>     account_id INT NOT NULL,
+>     order_id VARCHAR(255) NOT NULL,
+>     status VARCHAR(50) NULL,
+>     data JSON NULL,
+>     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+>     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+>     CONSTRAINT fk_tn_shipments_account FOREIGN KEY (account_id)
+>         REFERENCES platform_accounts.accounts(id) ON DELETE CASCADE,
+>     UNIQUE KEY uq_shipments_account_order (account_id, order_id)
+> );
+> ```
 
 -- ============================================================
 -- SCHEMA: ai
