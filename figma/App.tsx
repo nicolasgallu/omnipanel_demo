@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, createContext, useContext, type ReactNode } from "react";
 import { toPng } from "html-to-image";
 import omnipanelLogo from "./assets/omnipanel-lockup.png";
+import mlLogoImg from "./assets/ml-logo.png";
+import tnLogoImg from "./assets/tn-logo.png";
 
 // ─── Types & Data ─────────────────────────────────────────────────────────────
 
@@ -2370,10 +2372,8 @@ function NavIcon({ name, size = 16 }: { name: NavIconKey; size?: number }) {
   switch (name) {
     case "inventario": // boxes / stacked packages
       return (<svg {...p}><path d="M10 2.5l6 3.2v8.6l-6 3.2-6-3.2V5.7l6-3.2z" /><path d="M4 5.7l6 3.2 6-3.2M10 8.9v8.6" /></svg>);
-    case "ml": // marketplace tag
-      return (<svg {...p}><path d="M3.5 3.5h5l8 8-5 5-8-8v-5z" /><circle cx="6.5" cy="6.5" r="1" fill="currentColor" stroke="none" /></svg>);
-    case "tn": // storefront
-      return (<svg {...p}><path d="M3 7.5l1.2-4h11.6L17 7.5" /><path d="M3 7.5v9h14v-9" /><path d="M3 7.5a2 2 0 0 0 4 0 2 2 0 0 0 3 0 2 2 0 0 0 3 0 2 2 0 0 0 4 0" /><path d="M8 16.5v-4h4v4" /></svg>);
+    case "ml": return <MeliLogo size={Math.round(size * 1.35)} />;
+    case "tn": return <TnubeLogo size={Math.round(size * 1.35)} />;
     case "ventas": // trending-up chart
       return (<svg {...p}><path d="M3 16.5h14" /><path d="M4.5 13l3.5-4 3 2.5L17 5.5" /><path d="M13.5 5.5H17V9" /></svg>);
     case "ejecuciones": // queue / list with play
@@ -4298,7 +4298,12 @@ const CHANNEL_BRAND: Record<SalesChannelKey, { solid: string; ink: string }> = {
 };
 function ChannelBadge({ channel }: { channel: SalesChannelKey }) {
   const b = CHANNEL_BRAND[channel];
-  return <span className="inline-flex items-center rounded-md px-1.5 py-0.5 whitespace-nowrap" style={{ fontSize: "10px", fontWeight: 700, color: b.ink, background: b.solid, letterSpacing: "0.01em" }}>{SALES_CHANNELS[channel].name}</span>;
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md pl-1 pr-1.5 py-0.5 whitespace-nowrap" style={{ fontSize: "10px", fontWeight: 700, color: b.ink, background: b.solid, letterSpacing: "0.01em" }}>
+      {channel === "ml" ? <MeliLogo size={13} bare /> : <TnubeLogo size={13} bare />}
+      {SALES_CHANNELS[channel].name}
+    </span>
+  );
 }
 function OrderStatusBadge({ status }: { status: OrderStatus }) {
   const m = ORDER_STATUS[status];
@@ -6619,7 +6624,7 @@ function Configuracion() {
               <button key={t.key} onClick={() => setTab(t.key)}
                 className="flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium transition-all"
                 style={{ background: on ? "white" : "transparent", color: on ? "#4F46E5" : "#64748B", boxShadow: on ? "0 1px 2px rgba(0,0,0,0.06)" : "none" }}>
-                <span style={{ display: "flex", opacity: on ? 1 : 0.7 }}><NavIcon name={t.icon} size={15} /></span>
+                <span style={{ display: "flex", opacity: on || t.icon === "ml" || t.icon === "tn" ? 1 : 0.7 }}><NavIcon name={t.icon} size={15} /></span>
                 {t.label}
               </button>
             );
@@ -9025,3 +9030,22 @@ function RunDrawer({ run, onClose, onRemoved }: { run: MassRun; onClose: () => v
 
 type RowSelection = { ids: Set<number>; toggle: (id: number) => void; setMany: (ids: number[], on: boolean) => void };
 
+
+// ─── Logos de marca (íconos oficiales de MercadoLibre / Tienda Nube, tile cuadrado redondeado) ─
+function BrandLogo({ src, alt, size, zoom = 1 }: { src: string; alt: string; size: number; zoom?: number }) {
+  return (
+    <span className="inline-block flex-shrink-0 overflow-hidden" style={{ width: size, height: size, borderRadius: Math.round(size * 0.24) }}>
+      <img src={src} alt={alt} width={size} height={size} style={{ display: "block", width: "100%", height: "100%", transform: `scale(${zoom})` }} />
+    </span>
+  );
+}
+function MeliLogo({ size = 16 }: { size?: number; bare?: boolean }) { return <BrandLogo src={mlLogoImg} alt="MercadoLibre" size={size} />; }
+// El ícono de Tienda Nube viene en círculo: se apoya sobre un cuadrado del mismo azul (#0050C3)
+// para que el borde del círculo desaparezca y el símbolo quede centrado con aire, como el de MercadoLibre.
+function TnubeLogo({ size = 16 }: { size?: number; bare?: boolean }) {
+  return (
+    <span className="inline-flex items-center justify-center flex-shrink-0 overflow-hidden" style={{ width: size, height: size, borderRadius: Math.round(size * 0.24), background: "#0050C3" }}>
+      <img src={tnLogoImg} alt="Tienda Nube" style={{ display: "block", width: "92%", height: "92%" }} />
+    </span>
+  );
+}

@@ -34,6 +34,9 @@ export function ConfiguracionPage() {
         <div className="flex items-center gap-1 p-1 rounded-xl w-fit" style={{ background: '#F1F5F9' }}>
           {SETTINGS_TABS.map((t) => {
             const on = tab === t.key
+            // Los logos de MercadoLibre / Tienda Nube se ven siempre a opacidad
+            // completa; el resto de los íconos se atenúa cuando no está activa.
+            const alwaysFull = t.icon === 'ml' || t.icon === 'tn'
             return (
               <button
                 key={t.key}
@@ -45,7 +48,7 @@ export function ConfiguracionPage() {
                   boxShadow: on ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
                 }}
               >
-                <span style={{ display: 'flex', opacity: on ? 1 : 0.7 }}>
+                <span style={{ display: 'flex', opacity: alwaysFull ? 1 : on ? 1 : 0.7 }}>
                   <NavIcon name={t.icon} size={15} />
                 </span>
                 {t.label}

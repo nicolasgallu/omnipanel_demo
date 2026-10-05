@@ -1,4 +1,7 @@
 // Íconos SVG del sidebar (Figma: trazos 20x20, currentColor).
+// Los logos de MercadoLibre / Tienda Nube viven en BrandLogos.
+
+import { MeliLogo, TnubeLogo } from './BrandLogos'
 
 export type NavIconKey =
   | 'inventario'
@@ -42,23 +45,11 @@ export function NavIcon({ name, size = 16 }: { name: NavIconKey; size?: number }
         </svg>
       )
     case 'ml':
-      // marketplace tag
-      return (
-        <svg {...p}>
-          <path d="M3.5 3.5h5l8 8-5 5-8-8v-5z" />
-          <circle cx="6.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
-        </svg>
-      )
+      // logo oficial de MercadoLibre, un 35% más grande que el ícono genérico
+      return <MeliLogo size={Math.round(size * 1.35)} />
     case 'tn':
-      // storefront
-      return (
-        <svg {...p}>
-          <path d="M3 7.5l1.2-4h11.6L17 7.5" />
-          <path d="M3 7.5v9h14v-9" />
-          <path d="M3 7.5a2 2 0 0 0 4 0 2 2 0 0 0 3 0 2 2 0 0 0 3 0 2 2 0 0 0 4 0" />
-          <path d="M8 16.5v-4h4v4" />
-        </svg>
-      )
+      // logo oficial de Tienda Nube, un 35% más grande que el ícono genérico
+      return <TnubeLogo size={Math.round(size * 1.35)} />
     case 'ejecuciones':
       // corrida: play dentro de una tarjeta (Figma)
       return (
