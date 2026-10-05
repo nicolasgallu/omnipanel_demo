@@ -146,8 +146,8 @@ def dispatch_account(account_id):
         "UPDATE " + JOBS_TABLE
         + " SET status = 'running', started_at = NOW(), heartbeat_at = NOW()"
         + " WHERE id = :id AND status = 'queued'"
-        + " AND NOT EXISTS (SELECT 1 FROM " + JOBS_TABLE
-        + "   WHERE account_id = :a AND status = 'running')",
+        + " AND NOT EXISTS (SELECT 1 FROM (SELECT 1 FROM " + JOBS_TABLE
+        + "   WHERE account_id = :a AND status = 'running') AS _x)",
         {"id": row["id"], "a": account_id})
     if n == 1:
         logger.info("mass_action=dispatched job=%s account=%s", row["id"], account_id)
