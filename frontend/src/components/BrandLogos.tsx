@@ -2,8 +2,8 @@
 // Se dibujan como un tile cuadrado con las esquinas redondeadas al 24% del
 // tamaño, para reemplazar a los íconos genéricos de cada plataforma.
 
-import mlLogoImg from '../assets/mercado-libre.svg'
-import tnLogoImg from '../assets/tiendanube.svg'
+import mlLogoImg from '../assets/ml-logo.png'
+import tnLogoImg from '../assets/tn-logo.png'
 
 function BrandLogo({ src, alt, size, zoom = 1 }: { src: string; alt: string; size: number; zoom?: number }) {
   return (
