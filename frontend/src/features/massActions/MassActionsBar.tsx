@@ -112,7 +112,8 @@ export function MassActionsBar({
   const checkedTotal = modalAction
     ? (['ml', 'tn'] as MassChannel[]).reduce((n, ch) => n + (checked[ch] ? modalCounts[ch] : 0), 0)
     : 0
-  const nothingEligible = modalAction !== null && checkedTotal === 0 && !simulating
+  const nothingEligible =
+    modalAction !== null && modalCounts.ml === 0 && modalCounts.tn === 0 && !simulating
   const summaryParts = (['ml', 'tn'] as MassChannel[])
     .filter((ch) => checked[ch] && modalCounts[ch] > 0)
     .map((ch) => `${modalCounts[ch]} publicaciones en ${CHANNEL_LABEL[ch]}`)
@@ -250,8 +251,9 @@ export function MassActionsBar({
             ) : (
               <>
                 <p className="text-xs text-subtle leading-relaxed">
-                  Vas a {MASS_ACTIONS.find((a) => a.action === modalAction)!.verb}{' '}
-                  {summaryParts.join(' y ')}.
+                  {summaryParts.length > 0
+                    ? `Vas a ${MASS_ACTIONS.find((a) => a.action === modalAction)!.verb} ${summaryParts.join(' y ')}.`
+                    : 'Seleccioná al menos una plataforma para continuar.'}
                 </p>
                 {MASS_ACTIONS.find((a) => a.action === modalAction)!.platforms.map((ch) => (
                   <label

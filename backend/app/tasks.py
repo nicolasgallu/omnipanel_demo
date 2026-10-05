@@ -65,8 +65,6 @@ def enqueue(account_id, topic, notification):
         return True
 
     try:
-        from google.cloud import tasks_v2  # lazy: solo prod lo necesita
-
         queue = os.getenv("TASKS_QUEUE") or (
             "projects/{}/locations/{}/queues/meli-webhooks".format(
                 PROJECT_ID, os.getenv("TASKS_LOCATION", "us-south1")))
@@ -77,6 +75,7 @@ def enqueue(account_id, topic, notification):
                 "TASKS_WORKER_URL y TASKS_OIDC_SERVICE_ACCOUNT son obligatorios"
                 " con TASKS_BACKEND=cloudtasks")
 
+        from google.cloud import tasks_v2  # lazy: solo prod lo necesita
         client = tasks_v2.CloudTasksClient()
         client.create_task(request={
             "parent": queue,
@@ -124,8 +123,6 @@ def enqueue_mass_action():
         return True
 
     try:
-        from google.cloud import tasks_v2  # lazy: solo prod lo necesita
-
         queue = os.getenv("MASS_ACTIONS_QUEUE") or (
             "projects/{}/locations/{}/queues/mass-actions".format(
                 PROJECT_ID, os.getenv("TASKS_LOCATION", "us-south1")))
@@ -136,6 +133,7 @@ def enqueue_mass_action():
                 "MASS_ACTIONS_WORKER_URL y TASKS_OIDC_SERVICE_ACCOUNT son"
                 " obligatorios con TASKS_BACKEND=cloudtasks")
 
+        from google.cloud import tasks_v2  # lazy: solo prod lo necesita
         client = tasks_v2.CloudTasksClient()
         client.create_task(request={
             "parent": queue,
